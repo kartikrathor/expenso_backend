@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: expenso-backend
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
