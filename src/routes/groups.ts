@@ -11,6 +11,18 @@ function isMember(group: { members: { user: { toString(): string } }[] }, userId
   return group.members.some(m => m.user.toString() === userId);
 }
 
+function groupPayload(g: InstanceType<typeof Group>) {
+  return {
+    id: g.id,
+    name: g.name,
+    emoji: g.emoji,
+    inviteCode: g.inviteCode,
+    memberCount: g.members.length,
+    monthlyBudget: g.monthlyBudget ?? 0,
+    createdBy: g.createdBy,
+  };
+}
+
 /** List groups I'm in */
 router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -21,13 +33,8 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({
       groups: groups.map(g => ({
-        id: g.id,
-        name: g.name,
-        emoji: g.emoji,
-        inviteCode: g.inviteCode,
-        memberCount: g.members.length,
+        ...groupPayload(g),
         members: g.members,
-        createdBy: g.createdBy,
       })),
     });
   } catch (err) {
@@ -40,12 +47,19 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
 router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { name, emoji } = req.body as { name?: string; emoji?: string };
+    const { name, emoji, monthlyBudget } = req.body as {
+      name?: string;
+      emoji?: string;
+      monthlyBudget?: number;
+    };
 
     if (!name?.trim()) {
       res.status(400).json({ error: 'Group name is required' });
       return;
     }
+
+    const budget =
+      typeof monthlyBudget === 'number' && monthlyBudget > 0 ? monthlyBudget : 0;
 
     const inviteCode = makeInviteCode();
     const group = await Group.create({
@@ -53,17 +67,12 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       emoji: emoji?.trim() || '👥',
       createdBy: userId,
       inviteCode,
+      monthlyBudget: budget,
       members: [{ user: userId, role: 'owner', joinedAt: new Date() }],
     });
 
     res.status(201).json({
-      group: {
-        id: group.id,
-        name: group.name,
-        emoji: group.emoji,
-        inviteCode: group.inviteCode,
-        memberCount: 1,
-      },
+      group: groupPayload(group),
     });
   } catch (err) {
     console.error('Create group error:', err);
@@ -75,7 +84,10 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
 router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { inviteCode } = req.body as { inviteCode?: string };
+    const { inviteCode, monthlyBudget } = req.body as {
+      inviteCode?: string;
+      monthlyBudget?: number;
+    };
 
     if (!inviteCode?.trim()) {
       res.status(400).json({ error: 'Invite code is required' });
@@ -88,10 +100,18 @@ router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const joinerBudget =
+      typeof monthlyBudget === 'number' && monthlyBudget > 0 ? monthlyBudget : 0;
+    const mergedBudget = Math.max(group.monthlyBudget ?? 0, joinerBudget);
+    if (mergedBudget !== (group.monthlyBudget ?? 0)) {
+      group.monthlyBudget = mergedBudget;
+    }
+
     if (isMember(group, userId)) {
+      await group.save();
       res.status(200).json({
         message: 'Already a member',
-        group: { id: group.id, name: group.name, emoji: group.emoji },
+        group: groupPayload(group),
       });
       return;
     }
@@ -105,17 +125,49 @@ router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({
       message: 'Joined group',
-      group: {
-        id: group.id,
-        name: group.name,
-        emoji: group.emoji,
-        inviteCode: group.inviteCode,
-        memberCount: group.members.length,
-      },
+      group: groupPayload(group),
     });
   } catch (err) {
     console.error('Join group error:', err);
     res.status(500).json({ error: 'Could not join group' });
+  }
+});
+
+/** Update shared monthly budget (any member). Uses max if client sends proposeMax. */
+router.patch('/:id/budget', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const group = await Group.findById(req.params.id);
+    if (!group) {
+      res.status(404).json({ error: 'Group not found' });
+      return;
+    }
+    if (!isMember(group, userId)) {
+      res.status(403).json({ error: 'Not a member of this group' });
+      return;
+    }
+
+    const { monthlyBudget, mergeMax } = req.body as {
+      monthlyBudget?: number;
+      mergeMax?: boolean;
+    };
+
+    if (typeof monthlyBudget !== 'number' || monthlyBudget < 0) {
+      res.status(400).json({ error: 'monthlyBudget must be a non-negative number' });
+      return;
+    }
+
+    if (mergeMax) {
+      group.monthlyBudget = Math.max(group.monthlyBudget ?? 0, monthlyBudget);
+    } else {
+      group.monthlyBudget = monthlyBudget;
+    }
+    await group.save();
+
+    res.json({ group: groupPayload(group) });
+  } catch (err) {
+    console.error('Update budget error:', err);
+    res.status(500).json({ error: 'Could not update budget' });
   }
 });
 
@@ -137,7 +189,13 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    res.json({ group });
+    res.json({
+      group: {
+        ...group.toObject(),
+        id: group.id,
+        monthlyBudget: group.monthlyBudget ?? 0,
+      },
+    });
   } catch (err) {
     console.error('Get group error:', err);
     res.status(500).json({ error: 'Could not fetch group' });

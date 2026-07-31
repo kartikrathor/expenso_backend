@@ -14,6 +14,7 @@ export interface IGroup extends Document {
   createdBy: Types.ObjectId;
   members: IGroupMember[];
   inviteCode: string;
+  monthlyBudget: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -34,6 +35,7 @@ const groupSchema = new Schema<IGroup>(
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     members: { type: [groupMemberSchema], default: [] },
     inviteCode: { type: String, required: true, unique: true, index: true },
+    monthlyBudget: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true },
 );
