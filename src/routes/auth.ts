@@ -1,6 +1,11 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { Types } from 'mongoose';
 import { User } from '../models/User';
+import { Group } from '../models/Group';
+import { GroupExpense } from '../models/GroupExpense';
+import { AssistantUsage } from '../models/AssistantUsage';
+import { AssistantMiss } from '../models/AssistantIntent';
 import { AuthRequest, requireAuth, signToken } from '../middleware/auth';
 
 const router = Router();
@@ -159,6 +164,38 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error('Me error:', err);
     res.status(500).json({ error: 'Could not fetch profile' });
+  }
+});
+
+router.delete('/me', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const uid = new Types.ObjectId(userId);
+
+    const groups = await Group.find({ 'members.user': uid });
+    for (const group of groups) {
+      group.members = group.members.filter(m => m.user.toString() !== userId);
+      if (group.members.length === 0) {
+        await GroupExpense.deleteMany({ group: group._id });
+        await group.deleteOne();
+      } else {
+        if (group.createdBy.toString() === userId) {
+          group.createdBy = group.members[0].user;
+          group.members[0].role = 'owner';
+        }
+        await group.save();
+      }
+    }
+
+    await GroupExpense.deleteMany({ createdBy: uid });
+    await AssistantUsage.deleteMany({ userId: String(userId) });
+    await AssistantMiss.deleteMany({ userId: uid });
+    await User.deleteOne({ _id: uid });
+
+    res.json({ message: 'Account and data deleted' });
+  } catch (err) {
+    console.error('Delete account error:', err);
+    res.status(500).json({ error: 'Could not delete account' });
   }
 });
 

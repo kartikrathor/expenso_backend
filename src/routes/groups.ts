@@ -133,6 +133,43 @@ router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
+/** Leave joint account (separate from partner) */
+router.post('/:id/leave', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const group = await Group.findById(req.params.id);
+    if (!group) {
+      res.status(404).json({ error: 'Group not found' });
+      return;
+    }
+    if (!isMember(group, userId)) {
+      res.status(403).json({ error: 'Not a member of this group' });
+      return;
+    }
+
+    group.members = group.members.filter(m => m.user.toString() !== userId);
+
+    if (group.members.length === 0) {
+      const { GroupExpense } = await import('../models/GroupExpense');
+      await GroupExpense.deleteMany({ group: group._id });
+      await group.deleteOne();
+      res.json({ message: 'Left joint account', deleted: true });
+      return;
+    }
+
+    if (group.createdBy.toString() === userId) {
+      group.createdBy = group.members[0].user;
+      group.members[0].role = 'owner';
+    }
+
+    await group.save();
+    res.json({ message: 'Left joint account', deleted: false, group: groupPayload(group) });
+  } catch (err) {
+    console.error('Leave group error:', err);
+    res.status(500).json({ error: 'Could not leave joint account' });
+  }
+});
+
 /** Update shared monthly budget (any member). Uses max if client sends proposeMax. */
 router.patch('/:id/budget', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
