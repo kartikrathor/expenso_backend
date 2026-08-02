@@ -1,4 +1,11 @@
 import { AssistantIntent } from '../../models/AssistantIntent';
+import {
+  BUDGET_ASK_STEMS,
+  CATEGORY_SYNONYMS,
+  GREETING_STEMS,
+  PERIOD_SYNONYMS,
+  SPEND_ASK_STEMS,
+} from './lexicon';
 
 type SeedIntent = {
   key: string;
@@ -8,70 +15,102 @@ type SeedIntent = {
   chips?: string[];
 };
 
+function uniq(list: string[]): string[] {
+  return [...new Set(list.map(s => s.trim()).filter(Boolean))];
+}
+
+/** Build "X pe kitna" style patterns for every category synonym */
+function categoryAskPatterns(): string[] {
+  const out: string[] = [];
+  for (const words of Object.values(CATEGORY_SYNONYMS)) {
+    for (const w of words.slice(0, 12)) {
+      out.push(
+        `${w} pe kitna`,
+        `${w} kitna`,
+        `${w} spent`,
+        `how much on ${w}`,
+        `${w} selavu`,
+        `${w} kharchu`,
+        `${w} खर्च`,
+      );
+    }
+  }
+  return uniq(out);
+}
+
+function periodSpendPatterns(): string[] {
+  const out: string[] = [...SPEND_ASK_STEMS];
+  for (const p of PERIOD_SYNONYMS.month) {
+    out.push(`${p} kitna`, `${p} kharch`, `${p} spent`, `${p} selavu`, `${p} kharchu`);
+  }
+  for (const p of PERIOD_SYNONYMS.today) {
+    out.push(`${p} kitna`, `${p} kharch`, `${p} spent`, `${p} selavu`);
+  }
+  for (const p of PERIOD_SYNONYMS.week) {
+    out.push(`${p} kitna`, `${p} kharch`, `${p} spent`);
+  }
+  return uniq(out);
+}
+
 const SEED: SeedIntent[] = [
   {
     key: 'greeting',
     name: 'Greeting',
-    patterns: [
-      'hi', 'hello', 'hey', 'namaste', 'hii', 'good morning', 'good evening',
-      'kaise ho', 'whats up', 'yo',
-    ],
+    patterns: uniq([
+      ...GREETING_STEMS,
+      'hi', 'hello', 'hey', 'hii', 'yo', 'whats up',
+      'good morning', 'good evening', 'kaise ho',
+    ]),
     templates: [
-      'Hey! Main Expenso Assistant hoon. {scope} ke numbers se jawab dunga — poocho: kitna kharch, budget, top category.',
-      'Hello 👋 Kharch, budget ya merchants ke baare me kuch bhi poochho.',
+      'Hey! Main Expenso Assistant hoon — EN / हिन्दी / தமிழ் / తెలుగు samajh sakta hoon. Poochho: kitna kharch, budget, khana/food.',
+      'Vanakkam / Namaskaram / Namaste 👋 Ask about spending, budget, or top category.',
     ],
     chips: ['Is month kitna kharch?', 'Budget bacha?', 'Top category'],
   },
   {
     key: 'help',
     name: 'Help',
-    patterns: [
-      'help', 'madad', 'kya kar sakte', 'what can you do', 'options', 'commands',
-      'kaise use', 'guide',
-    ],
+    patterns: uniq([
+      'help', 'madad', 'kya kar sakte', 'what can you do', 'options', 'guide',
+      'உதவி', 'udhavi', 'సహాయం', 'sahayam', 'मदद',
+    ]),
     templates: [
-      'Main ye bata sakta hoon:\n• Total kharch (aaj / week / month)\n• Budget kitna bacha\n• Top category & merchant\n• Food/shopping pe kitna gaya\n• Sabse bada expense\n\nTry: “is month kitna kharch”',
+      'I can tell you:\n• Total spend (today / week / month)\n• Budget left\n• Top category & merchant\n• Food/khana/சாப்பாடு/భోజనం spend\n• Biggest expense\n\nTry: “is month kitna kharch” or “unavu selavu”',
     ],
     chips: ['Is month kitna kharch?', 'Budget bacha?', 'Top merchant'],
   },
   {
     key: 'total_spent',
     name: 'Total spent',
-    patterns: [
-      'kitna kharch', 'total spent', 'total kharch', 'kitna spend', 'how much spent',
-      'kitna gaya', 'kharcha kitna', 'spending total', 'overall kharch',
-      'is month kitna', 'is mahine kitna', 'month total', 'kitna hogaya',
-      'kharch kitna hua', 'spend kitna',
-    ],
+    patterns: periodSpendPatterns(),
     templates: [
-      '{period} tumhara total kharch {total} hai ({count} transactions) — {scope}.',
-      '{period} {total} spend ho chuka hai. Sabse zyada {topCategory} pe ({topCategoryAmount}).',
+      '{period} total spend is {total} ({count} transactions) — {scope}.',
+      '{period} {total} spend ho chuka hai. Top: {topCategory} ({topCategoryAmount}).',
     ],
     chips: ['Budget bacha?', 'Top category', 'Aaj kitna?'],
   },
   {
     key: 'today_spent',
     name: 'Today spent',
-    patterns: [
-      'aaj kitna', 'today spent', 'aaj ka kharch', 'today total', 'aj kitna',
-      'aaj spend', 'today kharch',
-    ],
+    patterns: uniq([
+      ...PERIOD_SYNONYMS.today.flatMap(p => [`${p} kitna`, `${p} kharch`, `${p} spent`, `${p} selavu`, `${p} kharchu`]),
+      'today spent', 'aaj ka kharch', 'today total',
+    ]),
     templates: [
-      'Aaj ka kharch {todayTotal} hai.',
-      'Aaj tak {todayTotal} spend hua hai. Month total abhi {total} hai.',
+      'Today spend: {todayTotal}.',
+      'Aaj {todayTotal}. This month so far: {total}.',
     ],
     chips: ['Is month kitna?', 'Budget bacha?'],
   },
   {
     key: 'budget_left',
     name: 'Budget remaining',
-    patterns: [
-      'budget bacha', 'kitna bacha', 'remaining budget', 'budget left',
-      'budget kitna', 'bacha kitna', 'budget status', 'budget use',
-      'kitna budget', 'over budget',
-    ],
+    patterns: uniq([
+      ...BUDGET_ASK_STEMS,
+      'budget kitna', 'budget status', 'budget use', 'over budget',
+    ]),
     templates: [
-      'Monthly budget {budget} hai. Abhi {budgetUsedPct} use ho chuka, {remaining} bacha hai.',
+      'Monthly budget {budget}. Used {budgetUsedPct}, left {remaining}.',
       'Budget: {budget} · Used: {budgetUsedPct} · Remaining: {remaining}.',
     ],
     chips: ['Is month kitna kharch?', 'Top category'],
@@ -79,91 +118,90 @@ const SEED: SeedIntent[] = [
   {
     key: 'top_category',
     name: 'Top category',
-    patterns: [
+    patterns: uniq([
       'top category', 'sabse zyada category', 'kis category', 'kahan zyada',
-      'zyada kahan', 'category breakdown', 'kis cheez pe zyada',
-      'most spent category', 'highest category',
-    ],
+      'zyada kahan', 'most spent category', 'highest category',
+      'எங்கே அதிகம்', 'enge adhikam', 'ఎక్కడ ఎక్కువ', 'ekkada ekkuva',
+      'सबसे ज्यादा',
+    ]),
     templates: [
-      '{period} sabse zyada {topCategory} pe gaya — {topCategoryAmount}.',
-      'Top category: {topCategory} ({topCategoryAmount}) out of {total}.',
+      '{period} sabse zyada {topCategory} — {topCategoryAmount}.',
+      'Top category: {topCategory} ({topCategoryAmount}) of {total}.',
     ],
     chips: ['Top merchant', 'Is month kitna?', 'Food pe kitna?'],
   },
   {
     key: 'top_merchant',
     name: 'Top merchant',
-    patterns: [
+    patterns: uniq([
       'top merchant', 'sabse zyada merchant', 'kis shop', 'kahan se zyada',
-      'favorite store', 'most merchant', 'konsi shop',
-    ],
+      'most merchant', 'konsi shop',
+      'எந்த கடை', 'ఏ షాప్',
+    ]),
     templates: [
-      '{period} sabse zyada {topMerchant} pe kharch hua — {topMerchantAmount}.',
-      'Top merchant: {topMerchant} ({topMerchantAmount}).',
+      '{period} top merchant: {topMerchant} — {topMerchantAmount}.',
+      'Sabse zyada {topMerchant} pe ({topMerchantAmount}).',
     ],
     chips: ['Top category', 'Sabse bada expense'],
   },
   {
     key: 'biggest_expense',
     name: 'Biggest expense',
-    patterns: [
+    patterns: uniq([
       'sabse bada', 'biggest expense', 'largest expense', 'max expense',
       'sabse mehnga', 'highest transaction', 'bada kharch',
-    ],
+      'பெரிய செலவு', 'పెద్ద ఖర్చు',
+    ]),
     templates: [
-      '{period} sabse bada expense: {biggest}.',
-      'Bada wala hit: {biggest} — total period kharch {total}.',
+      '{period} biggest expense: {biggest}.',
+      'Bada wala: {biggest}. Period total {total}.',
     ],
     chips: ['Top category', 'Is month kitna?'],
   },
   {
     key: 'by_category',
     name: 'Spend by category',
-    patterns: [
-      'food pe kitna', 'khana pe', 'groceries pe', 'shopping pe', 'transport pe',
-      'uber pe', 'bills pe', 'health pe', 'entertainment pe',
-      'category pe kitna', 'pe kitna gaya',
-    ],
+    patterns: categoryAskPatterns(),
     templates: [
-      '{period} {category} pe {categoryAmount} gaya.',
-      '{category}: {categoryAmount} ({period}). Total kharch {total} tha.',
+      '{period} {category}: {categoryAmount}.',
+      '{category} pe {categoryAmount} ({period}). Total was {total}.',
     ],
     chips: ['Top category', 'Is month kitna?'],
   },
   {
     key: 'transaction_count',
     name: 'Transaction count',
-    patterns: [
+    patterns: uniq([
       'kitne transactions', 'kitni entries', 'how many expenses', 'kitne expense',
-      'count expenses', 'kitni baar',
-    ],
+      'count expenses', 'எத்தனை', 'ఎన్ని',
+    ]),
     templates: [
-      '{period} {count} transactions hain, total {total}.',
+      '{period}: {count} transactions, total {total}.',
     ],
     chips: ['Is month kitna?', 'Top merchant'],
   },
   {
     key: 'joint_summary',
     name: 'Joint summary',
-    patterns: [
+    patterns: uniq([
       'joint', 'shared', 'partner', 'dono ka', 'hamara kharch', 'joint account',
-      'shared expenses',
-    ],
+      'shared expenses', 'ஜாயிண்ட்', 'జాయింట్',
+    ]),
     templates: [
-      'Yeh {scope} summary hai: {period} total {total} ({count} entries). Top: {topCategory} ({topCategoryAmount}).',
+      '{scope} summary — {period}: {total} ({count} entries). Top: {topCategory} ({topCategoryAmount}).',
     ],
     chips: ['Budget bacha?', 'Top merchant'],
   },
   {
     key: 'compare_hint',
-    name: 'Saving tips light',
-    patterns: [
-      'kaise bachaye', 'save money', 'tips', 'kam kaise', 'saving tip',
-      'budget control',
-    ],
+    name: 'Saving tips',
+    patterns: uniq([
+      'kaise bachaye', 'save money', 'tips', 'kam kaise', 'saving tip', 'budget control',
+      'எப்படி சேமிப்பது', 'ఎలా సేవ్',
+    ]),
     templates: [
-      '{period} {topCategory} pe sabse zyada ({topCategoryAmount}) ja raha hai. Wahan thoda cut karo — budget me {remaining} bacha hai.',
-      'Quick tip: {topMerchant} pe {topMerchantAmount} gaya. Us category ko track karte raho.',
+      '{period} {topCategory} is highest ({topCategoryAmount}). Cut a bit there — budget left {remaining}.',
+      'Tip: {topMerchant} took {topMerchantAmount}. Watch that category.',
     ],
     chips: ['Top category', 'Budget bacha?'],
   },
@@ -185,5 +223,6 @@ export async function seedAssistantIntents(): Promise<void> {
       { upsert: true, new: true },
     );
   }
-  console.log(`✅ Assistant intents seeded (${SEED.length})`);
+  const totalPatterns = SEED.reduce((s, i) => s + i.patterns.length, 0);
+  console.log(`✅ Assistant intents seeded (${SEED.length} intents, ${totalPatterns} patterns)`);
 }

@@ -1,3 +1,9 @@
+import {
+  CATEGORY_SYNONYMS,
+  PERIOD_SYNONYMS,
+  textIncludesAny,
+} from './lexicon';
+
 export type ExpenseInput = {
   amount: number;
   merchantLabel: string;
@@ -63,28 +69,25 @@ export function filterByPeriod(expenses: ExpenseInput[], period: Period): Expens
 
 export function detectPeriod(text: string): Period {
   const t = text.toLowerCase();
-  if (/(aaj|today|aj)/.test(t)) return 'today';
-  if (/(is hafte|this week|hafte|week)/.test(t)) return 'week';
-  if (/(is saal|this year|saal|year)/.test(t)) return 'year';
-  if (/(sab|all time|overall|pura|total history)/.test(t)) return 'all';
+  const order: Period[] = ['today', 'week', 'year', 'all', 'month'];
+  for (const p of order) {
+    if (textIncludesAny(t, PERIOD_SYNONYMS[p])) return p;
+  }
   return 'month';
 }
 
 export function detectCategory(text: string): string | null {
   const t = text.toLowerCase();
-  const map: Record<string, string[]> = {
-    food: ['food', 'khana', 'खाना', 'swiggy', 'zomato', 'lunch', 'dinner', 'breakfast', 'cafe'],
-    groceries: ['grocer', 'kirana', 'किराना', 'blinkit', 'zepto', 'bigbasket', 'sabzi'],
-    shopping: ['shop', 'shopping', 'myntra', 'amazon', 'flipkart', 'kapde', 'clothes'],
-    transport: ['transport', 'uber', 'ola', 'petrol', 'fuel', 'auto', 'cab', 'travel', 'metro'],
-    entertainment: ['movie', 'netflix', 'spotify', 'entertainment', 'game', 'fun'],
-    bills: ['bill', 'recharge', 'electricity', 'wifi', 'rent', 'emi'],
-    health: ['health', 'medicine', 'hospital', 'doctor', 'pharmacy', 'medical'],
-  };
-  for (const [cat, keys] of Object.entries(map)) {
-    if (keys.some(k => t.includes(k))) return cat;
+  // Longer keys first to avoid short false hits
+  let best: { cat: string; len: number } | null = null;
+  for (const [cat, keys] of Object.entries(CATEGORY_SYNONYMS)) {
+    for (const k of keys) {
+      if (k && t.includes(k.toLowerCase())) {
+        if (!best || k.length > best.len) best = { cat, len: k.length };
+      }
+    }
   }
-  return null;
+  return best?.cat ?? null;
 }
 
 export type Stats = {
@@ -107,11 +110,11 @@ export type Stats = {
 };
 
 const PERIOD_LABEL: Record<Period, string> = {
-  today: 'aaj',
-  week: 'is hafte',
-  month: 'is month',
-  year: 'is saal',
-  all: 'ab tak',
+  today: 'today / aaj',
+  week: 'this week',
+  month: 'this month',
+  year: 'this year',
+  all: 'overall',
 };
 
 export function computeStats(
@@ -173,34 +176,29 @@ export function computeStats(
 export function fillTemplate(template: string, stats: Stats): string {
   const biggestStr = stats.biggest
     ? `${stats.biggest.merchantLabel} (${formatINR(stats.biggest.amount)})`
-    : 'kuch khaas nahi';
+    : '—';
 
-  return template
-    .replaceAll('{period}', stats.periodLabel)
-    .replaceAll('{total}', formatINR(stats.total))
-    .replaceAll('{todayTotal}', formatINR(stats.todayTotal))
-    .replaceAll('{count}', String(stats.count))
-    .replaceAll('{topCategory}', stats.topCategory || 'Other')
-    .replaceAll('{topCategoryAmount}', formatINR(stats.topCategoryAmount))
-    .replaceAll('{topMerchant}', stats.topMerchant || '—')
-    .replaceAll('{topMerchantAmount}', formatINR(stats.topMerchantAmount))
-    .replaceAll('{biggest}', biggestStr)
-    .replaceAll(
-      '{category}',
-      stats.categoryId ? categoryLabel(stats.categoryId) : 'is category',
-    )
-    .replaceAll(
-      '{categoryAmount}',
-      formatINR(stats.categoryAmount ?? 0),
-    )
-    .replaceAll('{budget}', formatINR(stats.budget))
-    .replaceAll(
-      '{remaining}',
-      stats.remaining != null ? formatINR(stats.remaining) : '—',
-    )
-    .replaceAll(
-      '{budgetUsedPct}',
-      stats.budgetUsedPct != null ? `${stats.budgetUsedPct}%` : '—',
-    )
-    .replaceAll('{scope}', stats.isJoint ? 'joint account' : 'personal');
+  const map: Record<string, string> = {
+    '{period}': stats.periodLabel,
+    '{total}': formatINR(stats.total),
+    '{todayTotal}': formatINR(stats.todayTotal),
+    '{count}': String(stats.count),
+    '{topCategory}': stats.topCategory || 'Other',
+    '{topCategoryAmount}': formatINR(stats.topCategoryAmount),
+    '{topMerchant}': stats.topMerchant || '—',
+    '{topMerchantAmount}': formatINR(stats.topMerchantAmount),
+    '{biggest}': biggestStr,
+    '{category}': stats.categoryId ? categoryLabel(stats.categoryId) : 'this category',
+    '{categoryAmount}': formatINR(stats.categoryAmount ?? 0),
+    '{budget}': formatINR(stats.budget),
+    '{remaining}': stats.remaining != null ? formatINR(stats.remaining) : '—',
+    '{budgetUsedPct}': stats.budgetUsedPct != null ? `${stats.budgetUsedPct}%` : '—',
+    '{scope}': stats.isJoint ? 'joint account' : 'personal',
+  };
+
+  let out = template;
+  for (const [k, v] of Object.entries(map)) {
+    out = out.split(k).join(v);
+  }
+  return out;
 }

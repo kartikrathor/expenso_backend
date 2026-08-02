@@ -17,6 +17,7 @@ export type ChatResult = {
 function normalize(msg: string): string {
   return msg
     .toLowerCase()
+    .normalize('NFKC')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
