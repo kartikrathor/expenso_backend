@@ -62,10 +62,10 @@ const SEED: SeedIntent[] = [
       'good morning', 'good evening', 'kaise ho',
     ]),
     templates: [
-      'Hey! Main Expenso Assistant hoon — EN / हिन्दी / தமிழ் / తెలుగు samajh sakta hoon. Poochho: kitna kharch, budget, khana/food.',
-      'Vanakkam / Namaskaram / Namaste 👋 Ask about spending, budget, or top category.',
+      'Hey! Main Expenso Assistant hoon. Poochho: kitna kharch, budget, tips, “kya spending theek hai?”, average/day.',
+      'Namaste 👋 Spend, save tips, budget check, ya simple calcs — sab poochho.',
     ],
-    chips: ['Is month kitna kharch?', 'Budget bacha?', 'Top category'],
+    chips: ['Kya spending theek?', 'Save kaise?', 'Roz kitna avg?'],
   },
   {
     key: 'help',
@@ -75,9 +75,9 @@ const SEED: SeedIntent[] = [
       'உதவி', 'udhavi', 'సహాయం', 'sahayam', 'मदद',
     ]),
     templates: [
-      'I can tell you:\n• Total spend (today / week / month)\n• Budget left\n• Top category & merchant\n• Food/khana/சாப்பாடு/భోజనం spend\n• Biggest expense\n\nTry: “is month kitna kharch” or “unavu selavu”',
+      'Main yeh kar sakta hoon:\n• Kitna kharch (today/week/month)\n• Budget left + kya pace theek hai\n• Kahan zyada / kahan kaato\n• Save tips + 10–20% cut estimate\n• Avg/day, projected month, safe daily\n• Joint: maine / partner / kisne kitna\n\nTry: “kahan zyada ja raha” or “paisa kaise bachaye”',
     ],
-    chips: ['Is month kitna kharch?', 'Budget bacha?', 'Top merchant'],
+    chips: ['Kahan zyada?', 'Save kaise?', 'Kya spending theek?'],
   },
   {
     key: 'total_spent',
@@ -184,26 +184,198 @@ const SEED: SeedIntent[] = [
     key: 'joint_summary',
     name: 'Joint summary',
     patterns: uniq([
-      'joint', 'shared', 'partner', 'dono ka', 'hamara kharch', 'joint account',
-      'shared expenses', 'ஜாயிண்ட்', 'జాయింట్',
+      'joint', 'shared', 'dono ka', 'hamara kharch', 'joint account',
+      'shared expenses', 'ஜாயிண்ட்', 'జాయింట్', 'shared spend',
     ]),
     templates: [
-      '{scope} summary — {period}: {total} ({count} entries). Top: {topCategory} ({topCategoryAmount}).',
+      '{scope} summary — {period}: {total} ({count} entries). Split: {memberSplit}.',
     ],
-    chips: ['Budget bacha?', 'Top merchant'],
+    chips: ['Maine kitna?', 'Partner ne kitna?', 'Kisne kitna?'],
   },
   {
-    key: 'compare_hint',
-    name: 'Saving tips',
+    key: 'my_spend',
+    name: 'My spend in joint',
     patterns: uniq([
-      'kaise bachaye', 'save money', 'tips', 'kam kaise', 'saving tip', 'budget control',
+      'maine kitna', 'mera kharch', 'mere kharch', 'main kitna', 'i spent', 'my spend',
+      'my share', 'mere se kitna', 'maine kharch', 'mera total', 'how much did i',
+      'how much i spent', 'my expenses', 'sirf mera', 'only mine',
+      'என்ன செலவு', 'నా ఖర్చు', 'मेरा खर्च', 'मैंने कितना',
+    ]),
+    templates: [
+      '{period} tumhara add: {myTotal} ({myCount} entries). Joint total {total}.',
+      'Tumne {period} {myTotal} add kiya. Partner/others: {partnerTotal}.',
+    ],
+    chips: ['Partner ne kitna?', 'Kisne kitna?', 'Is month kitna?'],
+  },
+  {
+    key: 'partner_spend',
+    name: 'Partner spend in joint',
+    patterns: uniq([
+      'partner ne kitna', 'usne kitna', 'partner kitna', 'partner spent', 'partner ka kharch',
+      'dusre ne kitna', 'unka kharch', 'wife ne', 'husband ne', 'unhone kitna',
+      'other person', 'partner share', 'partner expenses',
+      'பார்ட்னர்', 'భాగస్వామి', 'पार्टनर ने कितना',
+    ]),
+    templates: [
+      '{period} {partnerName}: {partnerTotal} ({partnerCount} entries). Tumhara: {myTotal}.',
+      '{partnerName} ne {period} {partnerTotal} add kiya. Joint total {total}.',
+    ],
+    chips: ['Maine kitna?', 'Kisne kitna?', 'Budget bacha?'],
+  },
+  {
+    key: 'member_split',
+    name: 'Who spent how much',
+    patterns: uniq([
+      'kisne kitna', 'kaun kitna', 'who spent', 'who paid', 'split by person',
+      'dono ka alag', 'har ek ka', 'member wise', 'by member', 'person wise',
+      'kaunsa kitna', 'who added', 'contribution', 'kitna kisne',
+      'யார் எவ்வளவு', 'ఎవరు ఎంత', 'किसने कितना',
+    ]),
+    templates: [
+      '{period} member-wise: {memberSplit}. Joint total {total}.',
+      'Split ({period}): {memberSplit}.',
+    ],
+    chips: ['Maine kitna?', 'Partner ne kitna?', 'Account wise?'],
+  },
+  {
+    key: 'group_split',
+    name: 'Spend by joint account',
+    patterns: uniq([
+      'account wise', 'group wise', 'kis account', 'which joint', 'har account',
+      'multiple joint', 'sab accounts', 'account ka kharch', 'by account',
+      'joint accounts', 'each joint', 'account split',
+    ]),
+    templates: [
+      '{period} account-wise: {groupSplit}. Overall {total}.',
+      'Joint accounts ({period}): {groupSplit}.',
+    ],
+    chips: ['Kisne kitna?', 'Maine kitna?', 'Is month kitna?'],
+  },
+  {
+    key: 'where_high',
+    name: 'Where spending is high',
+    patterns: uniq([
+      'kahan zyada', 'kahan jyada', 'zyada kahan', 'kahan ja raha', 'kahan spent',
+      'sabse zyada kahan', 'leak kahan', 'waste kahan', 'kahan problem',
+      'where am i spending', 'where most', 'highest spend where',
+      'खर्च कहां', 'ज्यादा कहां',
+    ]),
+    templates: [
+      '{period} sabse zyada {topCategory} ({topCategoryAmount}). Merchant side: {topMerchant} ({topMerchantAmount}). Wahan se cut shuru karo.',
+      'Leak point: {topCategory} — {topCategoryAmount} of {total}. Biggest single: {biggest}.',
+    ],
+    chips: ['Save kaise?', '10 percent kaato', 'Kya spending theek?'],
+  },
+  {
+    key: 'saving_tips',
+    name: 'How to save',
+    patterns: uniq([
+      'kaise bachaye', 'paisa kaise bachaye', 'save money', 'saving tip', 'tips',
+      'kam kaise', 'budget control', 'save kaise', 'kaise save', 'money saving',
+      'खर्च कैसे कम', 'पैसे कैसे बचाएं', 'saving tips', 'cut cost',
       'எப்படி சேமிப்பது', 'ఎలా సేవ్',
     ]),
     templates: [
-      '{period} {topCategory} is highest ({topCategoryAmount}). Cut a bit there — budget left {remaining}.',
-      'Tip: {topMerchant} took {topMerchantAmount}. Watch that category.',
+      'Tip: {topCategory} pe {topCategoryAmount} ja raha hai. 10% kaato → ~{topCut10} bachega; 20% → ~{topCut20}. {topMerchant} limit set karo.',
+      'Simple plan: (1) {topCategory} track karo (2) daily max ~{safeDaily} (3) impulse buys 24h delay. Budget left {remaining}.',
     ],
-    chips: ['Top category', 'Budget bacha?'],
+    chips: ['Kahan zyada?', 'Roz kitna avg?', 'Kya spending theek?'],
+  },
+  {
+    key: 'general_tips',
+    name: 'General expense tips',
+    patterns: uniq([
+      'general tip', 'kya tip', 'advice do', 'suggestion', 'koi tip', 'money advice',
+      'expense tip', 'financial tip', 'thodi advice', 'smart spending tip',
+    ]),
+    templates: [
+      'Habit tip: weekly review karo — {topCategory} highest hai. Subscriptions + food delivery pe soft cap lagao. Daily safe ~{safeDaily}.',
+      'Rule of thumb: needs pehle, wants baad me. Abhi {budgetUsedPct} budget use. Small wins: carry less UPI impulse, cook 2 days/week.',
+    ],
+    chips: ['Save kaise?', 'Budget bacha?', 'Kahan zyada?'],
+  },
+  {
+    key: 'budget_health',
+    name: 'Am I spending right',
+    patterns: uniq([
+      'kya spending theek', 'kya theek kharch', 'am i spending right', 'spending okay',
+      'budget ke hisaab', 'on track', 'overspending', 'shi kharch', 'sahi kharch',
+      'kya main sahi', 'decision', 'should i worry', 'budget check',
+      'pace theek', 'kya overspend', 'healthy spending',
+      'क्या सही खर्च', 'ठीक चल रहा',
+    ]),
+    templates: [
+      '{healthVerdict} Ideal ab tak ~{idealSpendSoFar}; actual month {total}. Safe/day ab ~{safeDaily} ({daysLeft} days left).',
+      '{healthVerdict} Projected month-end ~{projectedMonth} vs budget {budget}.',
+    ],
+    chips: ['Save kaise?', 'Roz kitna avg?', 'Budget bacha?'],
+  },
+  {
+    key: 'daily_avg',
+    name: 'Average per day',
+    patterns: uniq([
+      'roz kitna', 'daily average', 'avg per day', 'average day', 'per day kitna',
+      'din ka average', 'daily spend', 'average spending', 'rozana average',
+      'रोज कितना', 'प्रति दिन',
+    ]),
+    templates: [
+      'Is month ab tak avg/day ~{avgPerDay} (day {dayOfMonth}/{daysInMonth}). Budget daily ideal ~{dailyBudget}.',
+      'Average transaction ~{avgTxn}. Daily pace {avgPerDay}; safe remaining/day ~{safeDaily}.',
+    ],
+    chips: ['Projected month?', 'Kya spending theek?', 'Budget bacha?'],
+  },
+  {
+    key: 'projected_month',
+    name: 'Projected month spend',
+    patterns: uniq([
+      'projected', 'month end kitna', 'agar aise chala', 'forecast', 'estimate month',
+      'mahine me kitna hoga', 'projected spend', 'end of month', 'prediction',
+      'माह के अंत',
+    ]),
+    templates: [
+      'Is pace pe month-end ~{projectedMonth} (avg/day {avgPerDay}). Budget {budget}, left {remaining}.',
+      'Projection ~{projectedMonth}. Ideal so far {idealSpendSoFar}; actual month total {total}.',
+    ],
+    chips: ['Kya spending theek?', 'Save kaise?', 'Roz kitna avg?'],
+  },
+  {
+    key: 'safe_daily',
+    name: 'Safe daily spend left',
+    patterns: uniq([
+      'safe daily', 'roz kitna kharch kar sakta', 'daily limit', 'kitna per day bacha',
+      'din bhar kitna', 'aage kitna din', 'remaining per day', 'safe spend today',
+      'आज कितना खर्च',
+    ]),
+    templates: [
+      'Ab se safe ~{safeDaily}/day for {daysLeft} days left (budget left {remaining}).',
+      'Daily budget ideal {dailyBudget}; remaining pace {safeDaily}/day. Today already {todayTotal}.',
+    ],
+    chips: ['Budget bacha?', 'Kya spending theek?', 'Projected month?'],
+  },
+  {
+    key: 'cut_estimate',
+    name: 'Cut percent estimate',
+    patterns: uniq([
+      '10 percent', '20 percent', 'kaato to', 'cut 10', 'cut 20', 'agar kam karu',
+      'percent kaato', 'thoda kaatu', 'reduce by', 'kam kardu to kitna',
+      '10% ', '20% ',
+    ]),
+    templates: [
+      '{topCategory} se 10% cut ≈ {topCut10} save; 20% ≈ {topCut20}. Abhi us pe {topCategoryAmount}.',
+      'Easy win: {topMerchant} ({topMerchantAmount}) pe soft limit — 10–20% cut se {topCut10}–{topCut20} bachega.',
+    ],
+    chips: ['Save kaise?', 'Kahan zyada?', 'Kya spending theek?'],
+  },
+  {
+    key: 'compare_hint',
+    name: 'Saving tips (legacy)',
+    patterns: uniq([
+      'budget tip', 'control kharch', 'kharch kam',
+    ]),
+    templates: [
+      '{period} {topCategory} highest ({topCategoryAmount}). Cut thoda — left {remaining}. Safe/day {safeDaily}.',
+    ],
+    chips: ['Save kaise?', 'Kahan zyada?'],
   },
 ];
 

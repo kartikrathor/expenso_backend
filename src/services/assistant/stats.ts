@@ -10,9 +10,29 @@ export type ExpenseInput = {
   category: string;
   note?: string;
   date: string;
+  createdById?: string;
+  createdByName?: string;
+  paidById?: string;
+  paidByName?: string;
+  groupId?: string;
+  groupName?: string;
 };
 
 export type Period = 'today' | 'week' | 'month' | 'year' | 'all';
+
+export type MemberSpend = {
+  id: string;
+  name: string;
+  amount: number;
+  count: number;
+};
+
+export type GroupSpend = {
+  id: string;
+  name: string;
+  amount: number;
+  count: number;
+};
 
 const CATEGORY_LABELS: Record<string, string> = {
   food: 'Food',
@@ -78,7 +98,6 @@ export function detectPeriod(text: string): Period {
 
 export function detectCategory(text: string): string | null {
   const t = text.toLowerCase();
-  // Longer keys first to avoid short false hits
   let best: { cat: string; len: number } | null = null;
   for (const [cat, keys] of Object.entries(CATEGORY_SYNONYMS)) {
     for (const k of keys) {
@@ -88,6 +107,107 @@ export function detectCategory(text: string): string | null {
     }
   }
   return best?.cat ?? null;
+}
+
+function actorId(e: ExpenseInput): string {
+  return (e.createdById || e.paidById || 'unknown').toString();
+}
+
+function actorName(e: ExpenseInput): string {
+  return (e.createdByName || e.paidByName || 'Someone').trim() || 'Someone';
+}
+
+export function computeMemberBreakdown(
+  expenses: ExpenseInput[],
+  currentUserId?: string,
+): {
+  byMember: MemberSpend[];
+  myTotal: number;
+  myCount: number;
+  partnerTotal: number;
+  partnerCount: number;
+  partnerName: string;
+  memberSplitText: string;
+} {
+  const map = new Map<string, MemberSpend>();
+  for (const e of expenses) {
+    const id = actorId(e);
+    const prev = map.get(id);
+    if (prev) {
+      prev.amount += e.amount;
+      prev.count += 1;
+      if (actorName(e) !== 'Someone') prev.name = actorName(e);
+    } else {
+      map.set(id, {
+        id,
+        name: currentUserId && id === currentUserId ? 'You' : actorName(e),
+        amount: e.amount,
+        count: 1,
+      });
+    }
+  }
+
+  const byMember = [...map.values()].sort((a, b) => b.amount - a.amount);
+  if (currentUserId) {
+    const me = byMember.find(m => m.id === currentUserId);
+    if (me) me.name = 'You';
+  }
+
+  const my = currentUserId ? byMember.find(m => m.id === currentUserId) : undefined;
+  const others = currentUserId
+    ? byMember.filter(m => m.id !== currentUserId)
+    : byMember;
+
+  const partner =
+    others.length === 1
+      ? others[0]
+      : others.length > 1
+        ? {
+            id: 'partners',
+            name: 'Partners',
+            amount: others.reduce((s, o) => s + o.amount, 0),
+            count: others.reduce((s, o) => s + o.count, 0),
+          }
+        : { id: '', name: 'Partner', amount: 0, count: 0 };
+
+  const memberSplitText = byMember.length
+    ? byMember
+        .map(m => `${m.name}: ${formatINR(m.amount)} (${m.count})`)
+        .join(' · ')
+    : 'No member data yet';
+
+  return {
+    byMember,
+    myTotal: my?.amount ?? 0,
+    myCount: my?.count ?? 0,
+    partnerTotal: partner.amount,
+    partnerCount: partner.count,
+    partnerName: partner.name || 'Partner',
+    memberSplitText,
+  };
+}
+
+export function computeGroupBreakdown(expenses: ExpenseInput[]): {
+  byGroup: GroupSpend[];
+  groupSplitText: string;
+} {
+  const map = new Map<string, GroupSpend>();
+  for (const e of expenses) {
+    const id = e.groupId || 'joint';
+    const name = e.groupName || 'Joint';
+    const prev = map.get(id);
+    if (prev) {
+      prev.amount += e.amount;
+      prev.count += 1;
+    } else {
+      map.set(id, { id, name, amount: e.amount, count: 1 });
+    }
+  }
+  const byGroup = [...map.values()].sort((a, b) => b.amount - a.amount);
+  const groupSplitText = byGroup.length
+    ? byGroup.map(g => `${g.name}: ${formatINR(g.amount)} (${g.count})`).join(' · ')
+    : '—';
+  return { byGroup, groupSplitText };
 }
 
 export type Stats = {
@@ -107,6 +227,27 @@ export type Stats = {
   remaining: number | null;
   budgetUsedPct: number | null;
   isJoint: boolean;
+  myTotal: number;
+  myCount: number;
+  partnerTotal: number;
+  partnerCount: number;
+  partnerName: string;
+  memberSplitText: string;
+  groupSplitText: string;
+  groupCount: number;
+  dayOfMonth: number;
+  daysInMonth: number;
+  daysLeft: number;
+  avgPerDay: number;
+  avgTxn: number;
+  dailyBudget: number;
+  idealSpendSoFar: number;
+  projectedMonth: number;
+  topCut10: number;
+  topCut20: number;
+  safeDaily: number;
+  paceStatus: 'no_budget' | 'on_track' | 'fast' | 'slow' | 'over_budget';
+  healthVerdict: string;
 };
 
 const PERIOD_LABEL: Record<Period, string> = {
@@ -124,6 +265,7 @@ export function computeStats(
     categoryId?: string | null;
     monthlyBudget?: number;
     isJoint?: boolean;
+    currentUserId?: string;
   },
 ): Stats {
   const periodList = filterByPeriod(expenses, opts.period);
@@ -153,6 +295,41 @@ export function computeStats(
   const remaining = budget > 0 ? Math.max(0, budget - monthTotal) : null;
   const budgetUsedPct = budget > 0 ? Math.round((monthTotal / budget) * 100) : null;
 
+  const members = computeMemberBreakdown(periodList, opts.currentUserId);
+  const groups = computeGroupBreakdown(periodList);
+
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const daysLeft = Math.max(0, daysInMonth - dayOfMonth);
+  const avgPerDay = dayOfMonth > 0 ? monthTotal / dayOfMonth : 0;
+  const avgTxn = periodList.length > 0 ? total / periodList.length : 0;
+  const dailyBudget = budget > 0 ? budget / daysInMonth : 0;
+  const idealSpendSoFar = dailyBudget * dayOfMonth;
+  const projectedMonth = avgPerDay * daysInMonth;
+  const topCut10 = (topCat ? topCat[1] : 0) * 0.1;
+  const topCut20 = (topCat ? topCat[1] : 0) * 0.2;
+  const safeDaily = remaining != null && daysLeft > 0 ? remaining / daysLeft : dailyBudget;
+
+  let paceStatus: Stats['paceStatus'] = 'no_budget';
+  let healthVerdict = 'Pehle monthly budget set karo — phir main bataunga spending theek hai ya nahi.';
+  if (budget > 0) {
+    const usedIdealPct = idealSpendSoFar > 0 ? monthTotal / idealSpendSoFar : 1;
+    if (monthTotal > budget) {
+      paceStatus = 'over_budget';
+      healthVerdict = `Budget already cross — used ${budgetUsedPct}%. Ab sirf zaroori kharch.`;
+    } else if (usedIdealPct > 1.15) {
+      paceStatus = 'fast';
+      healthVerdict = `Pace tez hai — aaj tak ideal ~${formatINR(idealSpendSoFar)}, tumhare ${formatINR(monthTotal)}.`;
+    } else if (usedIdealPct < 0.85) {
+      paceStatus = 'slow';
+      healthVerdict = `Achha pace — budget ke hisaab se abhi comfortable ho (ideal ~${formatINR(idealSpendSoFar)}).`;
+    } else {
+      paceStatus = 'on_track';
+      healthVerdict = `Spending roughly on track — budget ${formatINR(budget)}, used ${budgetUsedPct}%, left ${formatINR(remaining ?? 0)}.`;
+    }
+  }
+
   return {
     period: opts.period,
     periodLabel: PERIOD_LABEL[opts.period],
@@ -170,6 +347,27 @@ export function computeStats(
     remaining,
     budgetUsedPct,
     isJoint: !!opts.isJoint,
+    myTotal: members.myTotal,
+    myCount: members.myCount,
+    partnerTotal: members.partnerTotal,
+    partnerCount: members.partnerCount,
+    partnerName: members.partnerName,
+    memberSplitText: members.memberSplitText,
+    groupSplitText: groups.groupSplitText,
+    groupCount: groups.byGroup.length,
+    dayOfMonth,
+    daysInMonth,
+    daysLeft,
+    avgPerDay,
+    avgTxn,
+    dailyBudget,
+    idealSpendSoFar,
+    projectedMonth,
+    topCut10,
+    topCut20,
+    safeDaily,
+    paceStatus,
+    healthVerdict,
   };
 }
 
@@ -194,6 +392,25 @@ export function fillTemplate(template: string, stats: Stats): string {
     '{remaining}': stats.remaining != null ? formatINR(stats.remaining) : '—',
     '{budgetUsedPct}': stats.budgetUsedPct != null ? `${stats.budgetUsedPct}%` : '—',
     '{scope}': stats.isJoint ? 'joint account' : 'personal',
+    '{myTotal}': formatINR(stats.myTotal),
+    '{myCount}': String(stats.myCount),
+    '{partnerTotal}': formatINR(stats.partnerTotal),
+    '{partnerCount}': String(stats.partnerCount),
+    '{partnerName}': stats.partnerName,
+    '{memberSplit}': stats.memberSplitText,
+    '{groupSplit}': stats.groupSplitText,
+    '{avgPerDay}': formatINR(stats.avgPerDay),
+    '{avgTxn}': formatINR(stats.avgTxn),
+    '{dailyBudget}': formatINR(stats.dailyBudget),
+    '{idealSpendSoFar}': formatINR(stats.idealSpendSoFar),
+    '{projectedMonth}': formatINR(stats.projectedMonth),
+    '{topCut10}': formatINR(stats.topCut10),
+    '{topCut20}': formatINR(stats.topCut20),
+    '{safeDaily}': formatINR(stats.safeDaily),
+    '{daysLeft}': String(stats.daysLeft),
+    '{dayOfMonth}': String(stats.dayOfMonth),
+    '{daysInMonth}': String(stats.daysInMonth),
+    '{healthVerdict}': stats.healthVerdict,
   };
 
   let out = template;
