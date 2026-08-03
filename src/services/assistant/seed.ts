@@ -116,6 +116,22 @@ const SEED: SeedIntent[] = [
     chips: ['Is month kitna kharch?', 'Top category'],
   },
   {
+    key: 'salary_budget',
+    name: 'Ideal budget from salary',
+    patterns: uniq([
+      'salary', 'meri salary', 'my salary', 'income', 'inhand', 'in hand', 'take home',
+      'budget kitna hona chahiye', 'budget kitna rakhna', 'ideal budget', 'recommended budget',
+      'salary ke hisaab', 'salary se budget', 'kitna budget set', 'budget should be',
+      'salary hai budget', 'earn budget', 'ctc budget', 'paycheck budget',
+      'budget hona chahiye', 'kitna budget hona', 'salary budget',
+    ]),
+    templates: [
+      'Salary amount batao (jaise “salary 50000”) — main 50/30/20 se ideal monthly budget suggest karunga.',
+      'Tell me your salary figure (e.g. “salary 50k”) and I’ll suggest a monthly budget using 50/30/20.',
+    ],
+    chips: ['Budget bacha?', 'Save kaise?', 'Kya spending theek?'],
+  },
+  {
     key: 'top_category',
     name: 'Top category',
     patterns: uniq([
@@ -128,7 +144,22 @@ const SEED: SeedIntent[] = [
       '{period} sabse zyada {topCategory} — {topCategoryAmount}.',
       'Top category: {topCategory} ({topCategoryAmount}) of {total}.',
     ],
-    chips: ['Top merchant', 'Is month kitna?', 'Food pe kitna?'],
+    chips: ['2nd top category?', 'Top merchant', 'Is month kitna?'],
+  },
+  {
+    key: 'second_top_category',
+    name: '2nd top category',
+    patterns: uniq([
+      '2nd top category', 'second top category', 'second highest category',
+      'dusri category', 'doosri category', '2nd sabse zyada', 'second sabse zyada',
+      'number 2 category', 'no 2 category', '2nd karcha category',
+      'dusre number pe category', 'second most spent',
+    ]),
+    templates: [
+      '{period} 2nd top category: {secondTopCategory} — {secondTopCategoryAmount}. (1st is {topCategory}).',
+      'Number 2: {secondTopCategory} ({secondTopCategoryAmount}). Top abhi {topCategory} hai.',
+    ],
+    chips: ['Top category', 'Top merchant', 'Is month kitna?'],
   },
   {
     key: 'top_merchant',
@@ -380,21 +411,42 @@ const SEED: SeedIntent[] = [
 ];
 
 export async function seedAssistantIntents(): Promise<void> {
+  const overwrite = process.env.SEED_OVERWRITE_INTENTS === 'true';
   for (const item of SEED) {
-    await AssistantIntent.findOneAndUpdate(
-      { key: item.key },
-      {
-        $set: {
-          name: item.name,
-          patterns: item.patterns,
-          templates: item.templates,
-          chips: item.chips || [],
-          active: true,
+    if (overwrite) {
+      await AssistantIntent.findOneAndUpdate(
+        { key: item.key },
+        {
+          $set: {
+            name: item.name,
+            patterns: item.patterns,
+            templates: item.templates,
+            chips: item.chips || [],
+            active: true,
+          },
         },
-      },
-      { upsert: true, new: true },
-    );
+        { upsert: true, new: true },
+      );
+    } else {
+      // Preserve admin edits — only insert missing intents
+      await AssistantIntent.findOneAndUpdate(
+        { key: item.key },
+        {
+          $setOnInsert: {
+            name: item.name,
+            patterns: item.patterns,
+            templates: item.templates,
+            chips: item.chips || [],
+            active: true,
+          },
+        },
+        { upsert: true, new: true },
+      );
+    }
   }
   const totalPatterns = SEED.reduce((s, i) => s + i.patterns.length, 0);
-  console.log(`✅ Assistant intents seeded (${SEED.length} intents, ${totalPatterns} patterns)`);
+  console.log(
+    `✅ Assistant intents seeded (${SEED.length} intents, ${totalPatterns} patterns` +
+      `${overwrite ? ', overwrite=ON' : ', admin-safe'})`,
+  );
 }

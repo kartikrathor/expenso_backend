@@ -1,6 +1,42 @@
+/**
+ * Ask Expenso language policy
+ *
+ * Supported reply templates / chips: English + Hindi/Hinglish only.
+ * Other Indic scripts (Tamil, Telugu, …) are detected so we can:
+ *  - still match intents (patterns may include native script / roman)
+ *  - answer in English with a short notice until that locale is ready
+ *  - ask the LLM to understand the user message but reply in English
+ */
+
 import { PERIOD_SYNONYMS, textIncludesAny } from './lexicon';
 
 export type ChatLang = 'en' | 'hi';
+
+/** Detected user language (script / strong signal). */
+export type DetectedLang =
+  | ChatLang
+  | 'ta'
+  | 'te'
+  | 'kn'
+  | 'ml'
+  | 'bn'
+  | 'gu'
+  | 'pa'
+  | 'or'
+  | 'mr'
+  | 'other';
+
+export type LangPolicy = {
+  detected: DetectedLang;
+  /** Language used for templates / chips / LLM reply instruction */
+  replyLang: ChatLang;
+  /** True when we don't ship native replies for this language yet */
+  unsupported: boolean;
+  /** Human label for notices */
+  label: string;
+  /** One-line notice to prepend on rules replies (English) */
+  notice: string | null;
+};
 
 const HI_ROMAN = [
   'kya', 'hai', 'kitna', 'kitne', 'kharch', 'bacha', 'bachaye', 'kaise', 'kahan',
@@ -8,16 +44,108 @@ const HI_ROMAN = [
   'aaj', 'paisa', 'theek', 'sahi', 'madad', 'batao', 'thoda', 'kam',
 ];
 
-export function detectChatLang(text: string): ChatLang {
+const SCRIPT_RULES: { re: RegExp; lang: DetectedLang; label: string }[] = [
+  { re: /[\u0900-\u097F]/, lang: 'hi', label: 'Hindi' },
+  { re: /[\u0B80-\u0BFF]/, lang: 'ta', label: 'Tamil' },
+  { re: /[\u0C00-\u0C7F]/, lang: 'te', label: 'Telugu' },
+  { re: /[\u0C80-\u0CFF]/, lang: 'kn', label: 'Kannada' },
+  { re: /[\u0D00-\u0D7F]/, lang: 'ml', label: 'Malayalam' },
+  { re: /[\u0980-\u09FF]/, lang: 'bn', label: 'Bengali' },
+  { re: /[\u0A80-\u0AFF]/, lang: 'gu', label: 'Gujarati' },
+  { re: /[\u0A00-\u0A7F]/, lang: 'pa', label: 'Punjabi' },
+  { re: /[\u0B00-\u0B7F]/, lang: 'or', label: 'Odia' },
+];
+
+const UNSUPPORTED_LABELS: Partial<Record<DetectedLang, string>> = {
+  ta: 'Tamil',
+  te: 'Telugu',
+  kn: 'Kannada',
+  ml: 'Malayalam',
+  bn: 'Bengali',
+  gu: 'Gujarati',
+  pa: 'Punjabi',
+  or: 'Odia',
+  mr: 'Marathi',
+  other: 'this language',
+};
+
+/** Detect script / Hindi-roman; default English. */
+export function detectDetectedLang(text: string): DetectedLang {
   const t = (text || '').trim();
   if (!t) return 'en';
-  if (/[\u0900-\u097F]/.test(t)) return 'hi';
+
+  for (const rule of SCRIPT_RULES) {
+    if (rule.re.test(t)) return rule.lang;
+  }
+
   const lower = t.toLowerCase().replace(/[^\p{L}\s]/gu, ' ');
   const tokens = lower.split(/\s+/).filter(Boolean);
   if (!tokens.length) return 'en';
   const hiHits = tokens.filter(w => HI_ROMAN.includes(w)).length;
   if (hiHits >= 2 || (hiHits >= 1 && tokens.length <= 4)) return 'hi';
   return 'en';
+}
+
+export function detectChatLang(text: string): ChatLang {
+  const d = detectDetectedLang(text);
+  return d === 'hi' ? 'hi' : 'en';
+}
+
+export function resolveLangPolicy(
+  text: string,
+  clientHint?: ChatLang | string,
+): LangPolicy {
+  const detected = detectDetectedLang(text);
+  const supported = detected === 'en' || detected === 'hi';
+
+  let replyLang: ChatLang = supported ? detected : 'en';
+  if ((clientHint === 'hi' || clientHint === 'en') && supported) {
+    replyLang = clientHint;
+  }
+
+  if (supported) {
+    return {
+      detected,
+      replyLang,
+      unsupported: false,
+      label: detected === 'hi' ? 'Hindi' : 'English',
+      notice: null,
+    };
+  }
+
+  const label = UNSUPPORTED_LABELS[detected] || 'this language';
+  return {
+    detected,
+    replyLang: 'en',
+    unsupported: true,
+    label,
+    notice:
+      `I can read ${label}, but full ${label} replies aren't ready yet — answering in English. ` +
+      `You can also ask in English or Hindi.`,
+  };
+}
+
+/** Prepend language notice once (rules / soft fallbacks). */
+export function applyLangNotice(reply: string, policy: LangPolicy): string {
+  if (!policy.unsupported || !policy.notice) return reply;
+  const body = (reply || '').trim();
+  if (!body) return policy.notice;
+  if (body.includes("aren't ready yet")) return body;
+  return `${policy.notice}\n\n${body}`;
+}
+
+export function llmReplyInstruction(policy: LangPolicy): string {
+  if (policy.unsupported) {
+    return (
+      `The user wrote in ${policy.label}. Understand their question, but reply in clear English only ` +
+      `(we do not ship native ${policy.label} templates yet). ` +
+      `Start with one short line that ${policy.label} replies are coming soon, then give the expense answer.`
+    );
+  }
+  if (policy.replyLang === 'hi') {
+    return 'Answer in Hindi/Hinglish unless the user mixes languages.';
+  }
+  return 'Answer in English unless the user mixes languages.';
 }
 
 const HI_TO_EN: Record<string, string> = {
@@ -47,7 +175,7 @@ const EN_TO_HI: Record<string, string> = {
   'where am i overspending?': 'Kahan zyada?',
   'budget left?': 'Budget bacha?',
   'how much did i spend?': 'Maine kitna?',
-  'partner spend?': 'Partner ne kitna?',
+  'partner ne kitna?': 'Partner spend?',
   'who spent how much?': 'Kisne kitna?',
   'how much this month?': 'Is month kitna kharch?',
   'how much today?': 'Aaj kitna?',
@@ -74,7 +202,6 @@ export const FALLBACK_CHIPS_BY_LANG: Record<ChatLang, string[]> = {
   hi: ['Kya spending theek?', 'Save kaise?', 'Kahan zyada?', 'Budget bacha?'],
 };
 
-/** Prefer English templates when user is in English mode — light rewrite of common Hinglish replies is optional; chips are enough for UX. */
 export function pickLocalizedChips(
   chips: string[] | undefined,
   lang: ChatLang,

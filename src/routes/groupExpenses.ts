@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Group } from '../models/Group';
 import { GroupExpense } from '../models/GroupExpense';
 import { AuthRequest, requireAuth } from '../middleware/auth';
+import { recordCategoryCorrection } from '../services/categoryLearning';
 
 const router = Router({ mergeParams: true });
 
@@ -118,7 +119,20 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
       expense.amount = amount;
     }
     if (merchantLabel !== undefined) expense.merchantLabel = merchantLabel.trim();
-    if (category !== undefined) expense.category = category as any;
+    if (category !== undefined) {
+      const prevCat = String(expense.category || 'other').toLowerCase();
+      const nextCat = String(category || 'other').trim().toLowerCase().slice(0, 40) || 'other';
+      expense.category = nextCat as any;
+      if (prevCat !== nextCat) {
+        void recordCategoryCorrection({
+          userId,
+          fromCategory: prevCat,
+          toCategory: nextCat,
+          merchantLabel: expense.merchantLabel,
+          note: expense.note,
+        }).catch(() => {});
+      }
+    }
     if (note !== undefined) expense.note = note.trim();
     if (date !== undefined) expense.date = new Date(date);
 

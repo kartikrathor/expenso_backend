@@ -1,8 +1,40 @@
 import { AssistantIntent, AssistantMiss } from '../../models/AssistantIntent';
+import { AssistantLearning, LearningSource } from '../../models/AssistantLearning';
 import { completeChat, hasAnyLlmKey } from './llm';
 
 const MAX_MISSES_KEEP = Number(process.env.ASSISTANT_MISS_MAX || 800);
 const MISS_MAX_AGE_DAYS = Number(process.env.ASSISTANT_MISS_DAYS || 30);
+
+function providerToSource(provider?: string): LearningSource {
+  const p = (provider || '').toLowerCase();
+  if (p.includes('gemini')) return 'gemini';
+  if (p.includes('groq')) return 'groq';
+  if (p.includes('hugging') || p === 'hf') return 'huggingface';
+  return 'system';
+}
+
+export async function logLearning(entries: {
+  intentKey: string;
+  intentName?: string;
+  pattern: string;
+  source: LearningSource;
+  fromMessage?: string;
+  afterIntent?: string;
+  chipsShown?: string[];
+}[]): Promise<void> {
+  if (!entries.length) return;
+  await AssistantLearning.insertMany(
+    entries.map(e => ({
+      intentKey: e.intentKey,
+      intentName: e.intentName || e.intentKey,
+      pattern: e.pattern.slice(0, 120),
+      source: e.source,
+      fromMessage: e.fromMessage?.slice(0, 500),
+      afterIntent: e.afterIntent?.slice(0, 80),
+      chipsShown: e.chipsShown?.slice(0, 12).map(c => String(c).slice(0, 80)),
+    })),
+  );
+}
 
 /** Delete old / excess miss logs so Mongo stays small */
 export async function cleanupAssistantMisses(): Promise<{ deleted: number }> {
@@ -95,6 +127,14 @@ export async function expandPatternsFromMisses(): Promise<{
   const rows = Array.isArray(parsed) ? parsed : parsed?.items || parsed?.data || [];
   let addedPatterns = 0;
   const validKeys = new Set(intents.map(i => i.key));
+  const learningBatch: {
+    intentKey: string;
+    intentName?: string;
+    pattern: string;
+    source: LearningSource;
+    fromMessage?: string;
+  }[] = [];
+  const source = providerToSource(provider);
 
   for (const row of rows) {
     const key = String(row?.intent || '').trim();
@@ -115,6 +155,13 @@ export async function expandPatternsFromMisses(): Promise<{
         intent.patterns.push(p);
         before.add(p);
         grew += 1;
+        learningBatch.push({
+          intentKey: key,
+          intentName: intent.name,
+          pattern: p,
+          source,
+          fromMessage: uniqueMsgs.find(m => m.includes(p) || p.includes(m.slice(0, 20))),
+        });
       }
     }
     // Cap patterns per intent to avoid unbounded growth
@@ -126,6 +173,8 @@ export async function expandPatternsFromMisses(): Promise<{
       addedPatterns += grew;
     }
   }
+
+  await logLearning(learningBatch);
 
   // Remove the misses we processed (keep storage small)
   const ids = misses.map(m => m._id);

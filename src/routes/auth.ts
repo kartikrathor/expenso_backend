@@ -4,8 +4,10 @@ import { Types } from 'mongoose';
 import { User } from '../models/User';
 import { Group } from '../models/Group';
 import { GroupExpense } from '../models/GroupExpense';
+import { PersonalExpense } from '../models/PersonalExpense';
 import { AssistantUsage } from '../models/AssistantUsage';
 import { AssistantMiss } from '../models/AssistantIntent';
+import { UserCategory } from '../models/Category';
 import { AuthRequest, requireAuth, signToken } from '../middleware/auth';
 
 const router = Router();
@@ -83,7 +85,7 @@ router.post('/register', async (req, res: Response) => {
       avatarColor,
     });
 
-    const token = signToken({ userId: user.id, email: user.email });
+    const token = signToken({ userId: user.id, email: user.email, role: user.role || 'user' });
 
     res.status(201).json({
       token,
@@ -92,6 +94,7 @@ router.post('/register', async (req, res: Response) => {
         name: user.name,
         email: user.email,
         avatarColor: user.avatarColor,
+        role: user.role || 'user',
       },
     });
   } catch (err) {
@@ -129,7 +132,10 @@ router.post('/login', async (req, res: Response) => {
       return;
     }
 
-    const token = signToken({ userId: user.id, email: user.email });
+    user.lastActiveAt = new Date();
+    await user.save();
+
+    const token = signToken({ userId: user.id, email: user.email, role: user.role || 'user' });
 
     res.json({
       token,
@@ -138,6 +144,7 @@ router.post('/login', async (req, res: Response) => {
         name: user.name,
         email: user.email,
         avatarColor: user.avatarColor,
+        role: user.role || 'user',
       },
     });
   } catch (err) {
@@ -159,6 +166,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
         name: user.name,
         email: user.email,
         avatarColor: user.avatarColor,
+        role: user.role || 'user',
       },
     });
   } catch (err) {
@@ -188,14 +196,52 @@ router.delete('/me', requireAuth, async (req: AuthRequest, res: Response) => {
     }
 
     await GroupExpense.deleteMany({ createdBy: uid });
+    await PersonalExpense.deleteMany({ user: uid });
     await AssistantUsage.deleteMany({ userId: String(userId) });
     await AssistantMiss.deleteMany({ userId: uid });
+    await UserCategory.deleteMany({ user: uid });
     await User.deleteOne({ _id: uid });
 
     res.json({ message: 'Account and data deleted' });
   } catch (err) {
     console.error('Delete account error:', err);
     res.status(500).json({ error: 'Could not delete account' });
+  }
+});
+
+/**
+ * Wipe this user's app data but keep the login account.
+ * Personal expenses, budget, Ask usage, custom categories — account stays.
+ */
+router.delete('/me/data', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const uid = new Types.ObjectId(userId);
+
+    const [expenses, usage, misses, categories] = await Promise.all([
+      PersonalExpense.deleteMany({ user: uid }),
+      AssistantUsage.deleteMany({ userId: String(userId) }),
+      AssistantMiss.deleteMany({ userId: uid }),
+      UserCategory.deleteMany({ user: uid }),
+    ]);
+
+    await User.updateOne(
+      { _id: uid },
+      { $set: { monthlyBudget: 0 } },
+    );
+
+    res.json({
+      message: 'All personal data cleared; account kept',
+      deleted: {
+        expenses: expenses.deletedCount || 0,
+        assistantUsage: usage.deletedCount || 0,
+        assistantMisses: misses.deletedCount || 0,
+        customCategories: categories.deletedCount || 0,
+      },
+    });
+  } catch (err) {
+    console.error('Clear user data error:', err);
+    res.status(500).json({ error: 'Could not clear data' });
   }
 });
 

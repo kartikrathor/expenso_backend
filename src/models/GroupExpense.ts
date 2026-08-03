@@ -30,11 +30,7 @@ const groupExpenseSchema = new Schema<IGroupExpense>(
     group: { type: Schema.Types.ObjectId, ref: 'Group', required: true, index: true },
     amount: { type: Number, required: true, min: 0.01 },
     merchantLabel: { type: String, required: true, trim: true, maxlength: 80 },
-    category: {
-      type: String,
-      enum: ['food', 'groceries', 'shopping', 'transport', 'entertainment', 'bills', 'health', 'other'],
-      default: 'other',
-    },
+    category: { type: String, default: 'other', maxlength: 40 },
     note: { type: String, default: '', maxlength: 300 },
     date: { type: Date, required: true, default: Date.now },
     paidBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },

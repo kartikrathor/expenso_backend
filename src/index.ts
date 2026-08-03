@@ -1,12 +1,23 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { connectDB } from './config/db';
 import authRoutes from './routes/auth';
 import groupRoutes from './routes/groups';
 import groupExpenseRoutes from './routes/groupExpenses';
+import personalExpenseRoutes from './routes/personalExpenses';
 import assistantRoutes from './routes/assistant';
+import adminRoutes from './routes/admin';
+import categoryRoutes from './routes/categories';
+import {
+  merchantsPublicRouter,
+  merchantsAdminRouter,
+} from './routes/merchants';
 import { seedAssistantIntents } from './services/assistant/seed';
+import { ensureAdminUser, seedGlobalCategories } from './services/adminBootstrap';
+import { seedGlobalMerchants } from './services/merchantSeed';
+import { seedCategoryTerms, resolveCategoryConflicts } from './services/categoryLearning';
 import {
   cleanupAssistantMisses,
   expandPatternsFromMisses,
@@ -18,12 +29,18 @@ const PORT = Number(process.env.PORT) || 4000;
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'expenso-server' });
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/expenses', personalExpenseRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/merchants', merchantsPublicRouter);
+app.use('/api/admin', adminRoutes);
+app.use('/api/admin/merchants', merchantsAdminRouter);
 app.use('/api/groups', groupRoutes);
 app.use('/api/groups/:groupId/expenses', groupExpenseRoutes);
 app.use('/api/assistant', assistantRoutes);
@@ -38,10 +55,13 @@ async function runAssistantMaintenance(reason: string) {
     if (hasAnyLlmKey()) {
       expanded = await expandPatternsFromMisses();
     }
+    const conflicts = await resolveCategoryConflicts(8);
     console.log(
       `🧹 Assistant maintenance (${reason}): cleaned=${cleaned.deleted}, ` +
         `missesProcessed=${expanded.processed}, patterns+=${expanded.addedPatterns}` +
-        (expanded.provider ? ` via ${expanded.provider}` : ''),
+        (expanded.provider ? ` via ${expanded.provider}` : '') +
+        `, categoryConflictsResolved=${conflicts.resolved}` +
+        (conflicts.provider ? ` (${conflicts.provider})` : ''),
     );
   } catch (err) {
     console.error('Assistant maintenance failed:', err);
@@ -77,6 +97,10 @@ async function main() {
 
   await connectDB(uri);
   await seedAssistantIntents();
+  await seedGlobalCategories();
+  await seedGlobalMerchants();
+  await seedCategoryTerms();
+  await ensureAdminUser();
   startAssistantScheduler();
 
   app.listen(PORT, '0.0.0.0', () => {

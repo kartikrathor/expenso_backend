@@ -8,6 +8,8 @@ export const CATEGORY_SYNONYMS: Record<string, string[]> = {
     // EN
     'food', 'meal', 'lunch', 'dinner', 'breakfast', 'cafe', 'restaurant', 'snacks',
     'swiggy', 'zomato',
+    'pizza', 'burger', 'biryani', 'dosa', 'idli', 'thali', 'noodles', 'momos', 'samosa',
+    'chai', 'coffee', 'tea', 'juice', 'tiffin', 'khana',
     // HI + roman
     'khana', 'khaana', 'khane', 'खाना', 'भोजन', 'nashta', 'jalpan',
     // TA + roman
@@ -41,7 +43,8 @@ export const CATEGORY_SYNONYMS: Record<string, string[]> = {
   ],
   bills: [
     'bill', 'bills', 'recharge', 'electricity', 'wifi', 'rent', 'emi', 'mobile bill', 'current bill',
-    'बिल', 'किराया', 'रिचार्ज',
+    'light', 'light bill', 'bijli', 'current', 'gas', 'gas bill', 'lpg', 'cylinder', 'broadband', 'internet',
+    'बिल', 'किराया', 'रिचार्ज', 'बिजली', 'लाइट',
     'பில்', 'வாடகை', 'ரீசார்ஜ்', 'மின்சாரம்',
     'బిల్లు', 'అద్దె', 'రీఛార్జ్', 'కరెంట్',
   ],

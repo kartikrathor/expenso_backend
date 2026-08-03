@@ -218,6 +218,8 @@ export type Stats = {
   todayTotal: number;
   topCategory: string | null;
   topCategoryAmount: number;
+  secondTopCategory: string | null;
+  secondTopCategoryAmount: number;
   topMerchant: string | null;
   topMerchantAmount: number;
   biggest: ExpenseInput | null;
@@ -281,7 +283,9 @@ export function computeStats(
     merchMap.set(m, (merchMap.get(m) || 0) + e.amount);
   });
 
-  const topCat = [...catMap.entries()].sort((a, b) => b[1] - a[1])[0];
+  const catsRanked = [...catMap.entries()].sort((a, b) => b[1] - a[1]);
+  const topCat = catsRanked[0];
+  const secondCat = catsRanked[1];
   const topMerch = [...merchMap.entries()].sort((a, b) => b[1] - a[1])[0];
   const biggest = [...periodList].sort((a, b) => b.amount - a.amount)[0] || null;
 
@@ -338,6 +342,8 @@ export function computeStats(
     todayTotal,
     topCategory: topCat ? categoryLabel(topCat[0]) : null,
     topCategoryAmount: topCat ? topCat[1] : 0,
+    secondTopCategory: secondCat ? categoryLabel(secondCat[0]) : null,
+    secondTopCategoryAmount: secondCat ? secondCat[1] : 0,
     topMerchant: topMerch ? topMerch[0] : null,
     topMerchantAmount: topMerch ? topMerch[1] : 0,
     biggest,
@@ -383,6 +389,8 @@ export function fillTemplate(template: string, stats: Stats): string {
     '{count}': String(stats.count),
     '{topCategory}': stats.topCategory || 'Other',
     '{topCategoryAmount}': formatINR(stats.topCategoryAmount),
+    '{secondTopCategory}': stats.secondTopCategory || '—',
+    '{secondTopCategoryAmount}': formatINR(stats.secondTopCategoryAmount),
     '{topMerchant}': stats.topMerchant || '—',
     '{topMerchantAmount}': formatINR(stats.topMerchantAmount),
     '{biggest}': biggestStr,

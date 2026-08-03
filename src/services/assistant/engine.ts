@@ -10,12 +10,20 @@ import {
 } from './stats';
 import { completeChat, hasAnyLlmKey } from './llm';
 import {
-  detectChatLang,
+  applyLangNotice,
   FALLBACK_CHIPS_BY_LANG,
+  llmReplyInstruction,
   pickLocalizedChips,
+  resolveLangPolicy,
   ChatLang,
+  LangPolicy,
 } from './locale';
 import { historyBrief, HistoryTurn, resolveFollowUp } from './context';
+import {
+  buildSalaryBudgetAdvice,
+  extractMoneyAmount,
+  isSalaryBudgetQuestion,
+} from './salaryBudget';
 import {
   aiEnabled,
   consumeTokens,
@@ -30,12 +38,19 @@ export type ChatResult = {
   intent: string;
   chips: string[];
   matched: boolean;
-  source: 'rules' | 'llm' | 'fallback';
+  source: 'rules' | 'llm' | 'fallback' | 'precise';
   /** @deprecated prefer tokensRemaining */
   aiRemaining?: number;
   tokensRemaining?: number;
   tokensLimit?: number;
   tokenCost?: number;
+  /** Detected user language + whether we fell back to English */
+  lang?: {
+    detected: string;
+    replyLang: ChatLang;
+    unsupported: boolean;
+    label: string;
+  };
 };
 
 function normalize(msg: string): string {
@@ -118,17 +133,25 @@ const EMPTY_REPLIES = [
 ];
 
 function withTokens(
-  result: Omit<ChatResult, 'tokensRemaining' | 'tokensLimit' | 'tokenCost' | 'aiRemaining'>,
+  result: Omit<ChatResult, 'tokensRemaining' | 'tokensLimit' | 'tokenCost' | 'aiRemaining' | 'lang'>,
   spend: { remaining: number; limit: number; cost: number },
-  lang: ChatLang = 'en',
+  policy: LangPolicy,
 ): ChatResult {
+  const replyLang = policy.replyLang;
   return {
     ...result,
-    chips: pickLocalizedChips(result.chips, lang),
+    reply: applyLangNotice(result.reply, policy),
+    chips: pickLocalizedChips(result.chips, replyLang),
     tokensRemaining: spend.remaining,
     tokensLimit: spend.limit,
     tokenCost: spend.cost,
     aiRemaining: spend.remaining,
+    lang: {
+      detected: policy.detected,
+      replyLang: policy.replyLang,
+      unsupported: policy.unsupported,
+      label: policy.label,
+    },
   };
 }
 
@@ -158,67 +181,244 @@ function statsBrief(stats: Stats): string {
   ].join('\n');
 }
 
+/** Compact recent ledger for precise AI — never shown to the user in the UI. */
+function expensesBrief(expenses: ExpenseInput[], limit = 50): string {
+  if (!expenses.length) return '(no expenses logged)';
+  const sorted = [...expenses]
+    .filter(e => e && e.amount > 0)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, limit);
+  return sorted
+    .map(e => {
+      const day = (e.date || '').slice(0, 10) || '?';
+      const who = e.createdByName || e.paidByName || '';
+      const note = e.note ? ` note=${e.note.slice(0, 40)}` : '';
+      const group = e.groupName ? ` group=${e.groupName}` : '';
+      return `${day} | ${formatINR(e.amount)} | ${e.merchantLabel || 'Unknown'} | ${e.category || 'other'}${who ? ` | by=${who}` : ''}${group}${note}`;
+    })
+    .join('\n');
+}
+
+/**
+ * User tapped “more accurate answer” — force LLM with stats + recent expense rows.
+ * Response text only; do not expose that raw data was sent.
+ */
+export async function runPreciseAnswer(input: {
+  message: string;
+  previousReply?: string;
+  userId?: string;
+  expenses: ExpenseInput[];
+  monthlyBudget?: number;
+  isJoint?: boolean;
+  history?: HistoryTurn[];
+  lang?: ChatLang;
+}): Promise<ChatResult> {
+  const policy = resolveLangPolicy(input.message || '', input.lang);
+  const lang = policy.replyLang;
+  const emptySpend = {
+    remaining: dailyTokenLimit(),
+    limit: dailyTokenLimit(),
+    cost: 0,
+  };
+
+  if (!input.message?.trim()) {
+    return withTokens(
+      {
+        reply: lang === 'en' ? 'Ask a question first.' : 'Pehle sawaal likho.',
+        intent: 'empty',
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
+        matched: false,
+        source: 'fallback',
+      },
+      emptySpend,
+      policy,
+    );
+  }
+
+  if (!aiEnabled() || !hasAnyLlmKey() || !input.userId) {
+    return withTokens(
+      {
+        reply:
+          lang === 'en'
+            ? 'Precise AI is unavailable right now. Try again later or rephrase your question.'
+            : 'Precise AI abhi available nahi. Thodi der baad try karo ya sawaal clear likho.',
+        intent: 'ai_unavailable',
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
+        matched: false,
+        source: 'fallback',
+      },
+      emptySpend,
+      policy,
+    );
+  }
+
+  const stats = computeStats(input.expenses || [], {
+    period: 'month',
+    monthlyBudget: input.monthlyBudget || 0,
+    isJoint: input.isJoint,
+    currentUserId: input.userId,
+  });
+  const statsAll = computeStats(input.expenses || [], {
+    period: 'all',
+    monthlyBudget: input.monthlyBudget || 0,
+    isJoint: input.isJoint,
+    currentUserId: input.userId,
+  });
+
+  const cost = costForInput('keyboard', 'ai');
+  const credit = await consumeTokens(input.userId, cost, { countAi: true });
+  if (!credit.ok) {
+    return withTokens(
+      {
+        reply:
+          lang === 'en'
+            ? `Today's AI tokens are used up (daily ${dailyTokenLimit()}). Precise answers reset tomorrow.`
+            : `Aaj ke AI tokens khatam (daily ${dailyTokenLimit()}). Precise answers kal reset.`,
+        intent: 'ai_limit',
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
+        matched: false,
+        source: 'fallback',
+      },
+      { remaining: credit.remaining, limit: credit.limit, cost: 0 },
+      policy,
+    );
+  }
+
+  try {
+    const prior = historyBrief(input.history || [], 6);
+    const ledger = expensesBrief(input.expenses || [], 50);
+    const { text } = await completeChat([
+      {
+        role: 'system',
+        content:
+          'You are Expenso, a careful expense analyst for India. ' +
+          llmReplyInstruction(policy) +
+          ' The user wants a MORE ACCURATE answer than a quick template reply. ' +
+          'Use the verified stats AND the recent expense ledger. Never invent amounts. ' +
+          'Do NOT mention that you were given a data dump, ledger, JSON, or private payload — just answer naturally. ' +
+          'If the previous reply was incomplete or wrong, correct it briefly then give the better answer. ' +
+          'Be specific with ₹ figures from the data. Keep under 110 words. No markdown.',
+      },
+      {
+        role: 'user',
+        content:
+          (prior ? `Recent chat:\n${prior}\n\n` : '') +
+          `User question: ${input.message.trim()}\n` +
+          (input.previousReply
+            ? `Previous quick reply (improve on this):\n${input.previousReply.slice(0, 500)}\n\n`
+            : '') +
+          `Verified stats (this month):\n${statsBrief(stats)}\n\n` +
+          `Verified stats (all time):\n${statsBrief(statsAll)}\n\n` +
+          `Recent expenses (newest first, hidden from user UI):\n${ledger}`,
+      },
+    ]);
+
+    return withTokens(
+      {
+        reply: text.slice(0, 1200),
+        intent: 'llm_precise',
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
+        matched: true,
+        source: 'precise',
+      },
+      { remaining: credit.remaining, limit: credit.limit, cost: credit.cost },
+      policy,
+    );
+  } catch (err) {
+    console.error('Precise AI failed:', err);
+    await refundTokens(input.userId, cost, { countAi: true });
+    return withTokens(
+      {
+        reply:
+          lang === 'en'
+            ? 'Could not get a precise answer right now. Please try again in a moment.'
+            : 'Precise answer abhi nahi mil paya. Thodi der baad try karo.',
+        intent: 'ai_error',
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
+        matched: false,
+        source: 'fallback',
+      },
+      emptySpend,
+      policy,
+    );
+  }
+}
+
 async function llmFallbackReply(input: {
   userMessage: string;
   userId?: string;
   stats: Stats;
   inputMode: 'keyboard' | 'chip';
   history?: HistoryTurn[];
-  lang: ChatLang;
+  policy: LangPolicy;
+  /** User rejected previous rules answer — re-answer carefully */
+  correction?: boolean;
+  priorQuestion?: string;
 }): Promise<ChatResult | null> {
   if (!aiEnabled() || !hasAnyLlmKey() || !input.userId) return null;
 
+  const lang = input.policy.replyLang;
   const cost = costForInput(input.inputMode, 'ai');
   const credit = await consumeTokens(input.userId, cost, { countAi: true });
   if (!credit.ok) {
     return withTokens(
       {
         reply:
-          input.lang === 'en'
+          lang === 'en'
             ? `Today's AI tokens are used up (AI ~${tokenCost('ai')}/msg, daily ${dailyTokenLimit()}). Try clear chip questions for now — resets tomorrow.`
             : `Aaj ke AI tokens kam pad gaye (AI ~${tokenCost('ai')} tokens/msg, daily ${dailyTokenLimit()}). Chips / clear questions abhi bhi chalenge. Kal reset.`,
         intent: 'ai_limit',
-        chips: FALLBACK_CHIPS_BY_LANG[input.lang],
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
         matched: false,
         source: 'fallback',
       },
       { remaining: credit.remaining, limit: credit.limit, cost: 0 },
-      input.lang,
+      input.policy,
     );
   }
 
   try {
     const prior = historyBrief(input.history || [], 4);
+    const correctionNote = input.correction
+      ? ' The user says your previous reply was wrong or not what they asked. ' +
+        'Do NOT repeat the same mistaken interpretation (e.g. do not push joint-account setup unless they clearly asked). ' +
+        'Re-read their original question and answer that. Apologize briefly in one short clause, then give the correct answer. '
+      : '';
+    const questionBlock = input.priorQuestion
+      ? `Original question: ${input.priorQuestion}\nUser follow-up/correction: ${input.userMessage}`
+      : `Current question: ${input.userMessage}`;
+
     const { text } = await completeChat([
       {
         role: 'system',
         content:
           'You are Expenso, a friendly expense coach for India. ' +
-          `Answer in ${input.lang === 'en' ? 'English' : 'Hindi/Hinglish'} unless the user mixes languages. ` +
-          'ONLY use the provided numbers — never invent amounts. ' +
+          llmReplyInstruction(input.policy) +
+          correctionNote +
+          ' ONLY use the provided numbers — never invent amounts. ' +
           'Use recent chat if the user asks a follow-up (e.g. maine/partner/aur aaj). ' +
-          'You can give short save tips, budget pace judgment, and simple calcs from the stats. ' +
+          'You can give short save tips, budget pace judgment, salary→budget rules of thumb (50/30/20), and simple calcs from the stats. ' +
           'For joint accounts use myTotal / partner / memberSplit / groupSplit when relevant. ' +
-          'Keep reply under 70 words. If data is missing, say so. No markdown.',
+          'Keep reply under 80 words. If data is missing, say so. No markdown.',
       },
       {
         role: 'user',
         content:
           (prior ? `Recent chat:\n${prior}\n\n` : '') +
-          `Current question: ${input.userMessage}\n\nVerified expense stats:\n${statsBrief(input.stats)}`,
+          `${questionBlock}\n\nVerified expense stats:\n${statsBrief(input.stats)}`,
       },
     ]);
 
     return withTokens(
       {
         reply: text.slice(0, 800),
-        intent: 'llm_assist',
-        chips: FALLBACK_CHIPS_BY_LANG[input.lang],
+        intent: input.correction ? 'llm_correction' : 'llm_assist',
+        chips: FALLBACK_CHIPS_BY_LANG[lang],
         matched: true,
         source: 'llm',
       },
       { remaining: credit.remaining, limit: credit.limit, cost: credit.cost },
-      input.lang,
+      input.policy,
     );
   } catch (err) {
     console.error('LLM fallback failed:', err);
@@ -258,8 +458,8 @@ export async function runAssistantChat(input: {
   lang?: ChatLang;
 }): Promise<ChatResult> {
   const inputMode = input.inputMode === 'chip' ? 'chip' : 'keyboard';
-  const lang: ChatLang =
-    input.lang === 'hi' || input.lang === 'en' ? input.lang : detectChatLang(input.message || '');
+  const policy = resolveLangPolicy(input.message || '', input.lang);
+  const lang = policy.replyLang;
   const history = (input.history || [])
     .filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.text === 'string')
     .map(h => ({
@@ -270,9 +470,9 @@ export async function runAssistantChat(input: {
     .slice(-8);
 
   const wt = (
-    result: Omit<ChatResult, 'tokensRemaining' | 'tokensLimit' | 'tokenCost' | 'aiRemaining'>,
+    result: Omit<ChatResult, 'tokensRemaining' | 'tokensLimit' | 'tokenCost' | 'aiRemaining' | 'lang'>,
     spend: { remaining: number; limit: number; cost: number },
-  ) => withTokens(result, spend, lang);
+  ) => withTokens(result, spend, policy);
 
   const message = normalize(input.message || '');
   if (!message) {
@@ -288,6 +488,12 @@ export async function runAssistantChat(input: {
       tokensLimit: dailyTokenLimit(),
       tokensRemaining: dailyTokenLimit(),
       tokenCost: 0,
+      lang: {
+        detected: policy.detected,
+        replyLang: policy.replyLang,
+        unsupported: policy.unsupported,
+        label: policy.label,
+      },
     };
   }
 
@@ -300,6 +506,7 @@ export async function runAssistantChat(input: {
   let bestDoc: (typeof intents)[0] | null = null;
 
   for (const intent of intents) {
+    if (follow.avoidIntent && intent.key === follow.avoidIntent) continue;
     const scoreMerged = scoreIntent(scoreText, intent.patterns || []);
     const scoreRaw = scoreIntent(input.message, intent.patterns || []);
     const score = Math.max(scoreMerged, scoreRaw);
@@ -310,8 +517,8 @@ export async function runAssistantChat(input: {
     }
   }
 
-  // Local follow-up wins over weak lexical match
-  if (follow.forcedIntent) {
+  // Local follow-up wins over weak lexical match (unless correction said avoid that intent)
+  if (follow.forcedIntent && follow.forcedIntent !== follow.avoidIntent) {
     const forced = intents.find(i => i.key === follow.forcedIntent);
     if (forced) {
       bestKey = forced.key;
@@ -320,12 +527,17 @@ export async function runAssistantChat(input: {
     }
   }
 
-  // Rules first; AI only when score is weak
+  // Rules first; AI when score weak OR user corrected previous wrong answer
   const threshold = bestKey === 'greeting' || bestKey === 'help' ? 32 : 40;
+  const forceLlm =
+    !!follow.preferLlm &&
+    (!bestDoc || bestScore < threshold || bestKey === follow.avoidIntent);
+
   console.log(
     `Ask match: "${input.message.slice(0, 60)}" → ${bestKey} score=${bestScore} ` +
-      `(need ${threshold}${follow.usedContext ? `, ctx=${follow.reason}` : ''}) → ` +
-      `${bestDoc && bestScore >= threshold ? 'RULES' : 'AI/fallback'}`,
+      `(need ${threshold}${follow.usedContext ? `, ctx=${follow.reason}` : ''}` +
+      `${forceLlm ? ', correction→LLM' : ''}) → ` +
+      `${!forceLlm && bestDoc && bestScore >= threshold ? 'RULES' : 'AI/fallback'}`,
   );
 
   const periodHint = follow.forcedPeriod || detectPeriod(scoreText);
@@ -336,7 +548,9 @@ export async function runAssistantChat(input: {
     currentUserId: input.userId,
   });
 
-  if (!bestDoc || bestScore < threshold) {
+  const priorUserQ = [...history].reverse().find(h => h.role === 'user')?.text;
+
+  if (forceLlm || !bestDoc || bestScore < threshold) {
     await AssistantMiss.create({
       userId: input.userId,
       message: input.message.slice(0, 500),
@@ -348,7 +562,9 @@ export async function runAssistantChat(input: {
       stats: baseStats,
       inputMode,
       history,
-      lang,
+      policy,
+      correction: !!follow.preferLlm,
+      priorQuestion: follow.preferLlm ? priorUserQ : undefined,
     });
     if (llm) return llm;
 
@@ -373,8 +589,8 @@ export async function runAssistantChat(input: {
       {
         reply:
           lang === 'en'
-            ? "I didn't catch that exactly — try spend / budget / category below 👇"
-            : 'Ye exact samajh nahi aaya, lekin main kharch / budget / category bata sakta hoon. Niche se try karo 👇',
+            ? "Sorry — I misunderstood earlier. Try rephrasing, or use spend / budget / category below 👇"
+            : 'Sorry — pehle galat samajh gaya. Thoda clear likho, ya niche spend / budget / category try karo 👇',
         intent: 'unknown',
         chips: FALLBACK_CHIPS_BY_LANG[lang],
         matched: false,
@@ -431,6 +647,56 @@ export async function runAssistantChat(input: {
   }
 
   const jointOnly = ['my_spend', 'partner_spend', 'member_split', 'group_split', 'joint_summary'];
+
+  // Salary → ideal budget must never fall into joint-only gate
+  if (
+    intentKey === 'salary_budget' ||
+    follow.forcedIntent === 'salary_budget' ||
+    isSalaryBudgetQuestion(input.message)
+  ) {
+    const salaryDoc = intents.find(i => i.key === 'salary_budget') || doc;
+    const amount =
+      extractMoneyAmount(input.message) ||
+      extractMoneyAmount(scoreText) ||
+      (history.length
+        ? extractMoneyAmount([...history].reverse().find(h => h.role === 'user')?.text || '')
+        : null);
+
+    if (amount && amount >= 1000) {
+      return wt(
+        {
+          reply: buildSalaryBudgetAdvice(amount, lang),
+          intent: 'salary_budget',
+          chips: salaryDoc?.chips?.length
+            ? salaryDoc.chips
+            : ['Budget bacha?', 'Save kaise?', 'Kya spending theek?'],
+          matched: true,
+          source: 'rules',
+        },
+        spend,
+      );
+    }
+
+    return wt(
+      {
+        reply: pickTemplate(
+          salaryDoc?.templates?.length
+            ? salaryDoc.templates
+            : [
+                'Salary amount batao (jaise “salary 50000”) — main 50/30/20 se ideal monthly budget suggest karunga.',
+              ],
+        ),
+        intent: 'salary_budget',
+        chips: salaryDoc?.chips?.length
+          ? salaryDoc.chips
+          : ['Budget bacha?', 'Save kaise?', 'Kya spending theek?'],
+        matched: true,
+        source: 'rules',
+      },
+      spend,
+    );
+  }
+
   if (jointOnly.includes(intentKey) && !input.isJoint) {
     return wt(
       {
@@ -459,6 +725,7 @@ export async function runAssistantChat(input: {
     'budget_left',
     'general_tips',
     'budget_health',
+    'salary_budget',
   ];
   if (stats.count === 0 && !allowEmpty.includes(intentKey)) {
     return wt(
