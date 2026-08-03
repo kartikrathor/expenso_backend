@@ -71,17 +71,20 @@ export function buildSalaryBudgetAdvice(salary: number, lang: 'en' | 'hi' = 'en'
   if (lang === 'hi') {
     return (
       `Salary ${formatINR(salary)} maan ke: ` +
-      `monthly expense budget roughly ${formatINR(spendBudget)} (50% needs ${formatINR(needs)} + 30% wants ${formatINR(wants)}), ` +
-      `aur ${formatINR(save)} (~20%) save/invest. ` +
+      `monthly expense budget roughly ${formatINR(spendBudget)} ` +
+      `(50% needs ${formatINR(needs)} + 30% wants ${formatINR(wants)}), ` +
+      `aur ${formatINR(save)} (~20%) save/invest karo. ` +
       `Tight rakhna ho to Home pe budget ~${formatINR(strict)} set karo. ` +
-      `Ye rule-of-thumb hai — rent/EMIs zyada hon to needs % adjust karo.`
+      `Ye rule-of-thumb hai — rent/EMI zyada ho to needs % adjust karo.`
     );
   }
 
   return (
-    `With salary ${formatINR(salary)}: a solid monthly spend budget is about ${formatINR(spendBudget)} ` +
-    `(50% needs ~${formatINR(needs)}, 30% wants ~${formatINR(wants)}), and save/invest ~${formatINR(save)} (20%). ` +
-    `If you want a tighter cap, set Home budget near ${formatINR(strict)}. ` +
+    `With a salary of ${formatINR(salary)}: ` +
+    `aim for about ${formatINR(spendBudget)} monthly spending ` +
+    `(50% needs ${formatINR(needs)} + 30% wants ${formatINR(wants)}), ` +
+    `and save/invest ~${formatINR(save)} (20%). ` +
+    `For a tighter plan, set Home budget near ${formatINR(strict)}. ` +
     `This is a rule of thumb — raise the needs share if rent/EMIs are high.`
   );
 }

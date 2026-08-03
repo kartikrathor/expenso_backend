@@ -1,8 +1,10 @@
 import { Router, Response } from 'express';
 import { Group } from '../models/Group';
 import { GroupExpense } from '../models/GroupExpense';
+import { User } from '../models/User';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 import { recordCategoryCorrection } from '../services/categoryLearning';
+import { sendPushToUsers } from '../services/push';
 
 const router = Router({ mergeParams: true });
 
@@ -12,6 +14,10 @@ async function assertMember(groupId: string, userId: string) {
   const ok = group.members.some(m => m.user.toString() === userId);
   if (!ok) return { error: 'Not a member of this group', status: 403 as const };
   return { group };
+}
+
+function formatInr(n: number): string {
+  return `₹${Number(n || 0).toLocaleString('en-IN')}`;
 }
 
 /** List shared expenses in a group */
@@ -78,6 +84,41 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
     const populated = await GroupExpense.findById(expense.id)
       .populate('paidBy', 'name email avatarColor')
       .populate('createdBy', 'name');
+
+    // Notify other joint members (respect send/receive preferences)
+    const group = check.group!;
+    const actor = await User.findById(userId).select(
+      'name notifyPartnerOnMyJointAdd',
+    );
+    const actorWantsSend = actor?.notifyPartnerOnMyJointAdd !== false;
+    const others = group.members
+      .map(m => m.user.toString())
+      .filter(id => id !== userId);
+
+    if (actorWantsSend && others.length) {
+      const recipients = await User.find({
+        _id: { $in: others },
+        notifyMeOnPartnerJointAdd: { $ne: false },
+      }).select('_id');
+      const recipientIds = recipients.map(u => u.id);
+      if (recipientIds.length) {
+        const who = actor?.name?.split(/\s+/)[0] || 'Partner';
+        const label = merchantLabel.trim();
+        const noteBit = note?.trim() ? ` · ${note.trim().slice(0, 40)}` : '';
+        void sendPushToUsers(recipientIds, {
+          title: `${who} added an expense`,
+          body: `${formatInr(amount)} · ${label}${noteBit}`,
+          data: {
+            type: 'joint_expense',
+            groupId: String(groupId),
+            expenseId: expense.id,
+            actorName: who,
+            amount: String(amount),
+            merchantLabel: label,
+          },
+        }).catch(err => console.warn('Joint expense push failed:', err));
+      }
+    }
 
     res.status(201).json({ expense: populated });
   } catch (err) {

@@ -10,6 +10,9 @@ import personalExpenseRoutes from './routes/personalExpenses';
 import assistantRoutes from './routes/assistant';
 import adminRoutes from './routes/admin';
 import categoryRoutes from './routes/categories';
+import feedbackRoutes from './routes/feedback';
+import supportRoutes from './routes/support';
+import devicesRoutes from './routes/devices';
 import {
   merchantsPublicRouter,
   merchantsAdminRouter,
@@ -22,7 +25,10 @@ import {
   cleanupAssistantMisses,
   expandPatternsFromMisses,
 } from './services/assistant/maintenance';
+import proRoutes from './routes/pro';
+import { ensureProCatalog } from './services/proEntitlements';
 import { hasAnyLlmKey } from './services/assistant/llm';
+import { isPushConfigured } from './services/push';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -44,6 +50,10 @@ app.use('/api/admin/merchants', merchantsAdminRouter);
 app.use('/api/groups', groupRoutes);
 app.use('/api/groups/:groupId/expenses', groupExpenseRoutes);
 app.use('/api/assistant', assistantRoutes);
+app.use('/api/pro', proRoutes);
+app.use('/api/feedback', feedbackRoutes);
+app.use('/api/support', supportRoutes);
+app.use('/api/devices', devicesRoutes);
 
 async function runAssistantMaintenance(reason: string) {
   try {
@@ -101,6 +111,14 @@ async function main() {
   await seedGlobalMerchants();
   await seedCategoryTerms();
   await ensureAdminUser();
+  await ensureProCatalog();
+  if (isPushConfigured()) {
+    console.log('🔔 FCM push notifications enabled');
+  } else {
+    console.warn(
+      '⚠️  FCM off — add FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON to .env',
+    );
+  }
   startAssistantScheduler();
 
   app.listen(PORT, '0.0.0.0', () => {

@@ -1,4 +1,5 @@
 import { AssistantUsage } from '../../models/AssistantUsage';
+import { effectiveDailyTokens } from '../proEntitlements';
 
 export type TokenKind = 'rules' | 'ai' | 'chip';
 
@@ -6,7 +7,7 @@ function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Daily token pool per user */
+/** @deprecated Prefer effectiveDailyTokens(userId) — free users get 0 */
 export function dailyTokenLimit(): number {
   const n = Number(process.env.ASSISTANT_DAILY_TOKENS || 500);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500;
@@ -59,7 +60,7 @@ export async function getTokenUsage(userId: string): Promise<{
   aiCalls: number;
   costs: { rules: number; ai: number; chip: number };
 }> {
-  const limit = dailyTokenLimit();
+  const limit = await effectiveDailyTokens(userId);
   const day = todayKey();
   const doc = await AssistantUsage.findOne({ userId, day }).lean();
   const used = doc?.tokensUsed ?? 0;
@@ -91,9 +92,13 @@ export async function consumeTokens(
   cost: number,
   opts?: { countAi?: boolean },
 ): Promise<TokenSpendResult> {
-  const limit = dailyTokenLimit();
+  const limit = await effectiveDailyTokens(userId);
   const day = todayKey();
   const amount = Math.max(0, Math.floor(cost));
+
+  if (limit <= 0) {
+    return { ok: false, used: 0, remaining: 0, limit: 0, cost: amount };
+  }
 
   if (amount === 0) {
     const doc = await getOrCreate(userId, day);

@@ -27,6 +27,12 @@ const BUILTIN_FALLBACK = [
   { slug: 'transport', label: 'Transport', labelHi: 'यातायात', emoji: '🚗', color: '#38BDF8' },
   { slug: 'entertainment', label: 'Entertainment', labelHi: 'मनोरंजन', emoji: '🎬', color: '#FBBF24' },
   { slug: 'bills', label: 'Bills', labelHi: 'बिल', emoji: '📱', color: '#06B6D4' },
+  { slug: 'rent', label: 'Rent', labelHi: 'किराया', emoji: '🏠', color: '#A78BFA' },
+  { slug: 'taxes', label: 'Taxes', labelHi: 'कर', emoji: '🧾', color: '#FB923C' },
+  { slug: 'gifts', label: 'Gifts', labelHi: 'उपहार', emoji: '🎁', color: '#E879F9' },
+  { slug: 'donation', label: 'Donation', labelHi: 'दान', emoji: '🤝', color: '#34D399' },
+  { slug: 'insurance', label: 'Insurance', labelHi: 'बीमा', emoji: '🛡️', color: '#0EA5E9' },
+  { slug: 'personal_care', label: 'Personal Care', labelHi: 'पर्सनल केयर', emoji: '💇', color: '#D946EF' },
   { slug: 'health', label: 'Health', labelHi: 'स्वास्थ्य', emoji: '💊', color: '#F87171' },
   { slug: 'other', label: 'Other', labelHi: 'अन्य', emoji: '📦', color: '#94A3B8' },
 ];

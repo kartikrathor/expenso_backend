@@ -9,6 +9,7 @@ import { AssistantUsage } from '../models/AssistantUsage';
 import { AssistantMiss } from '../models/AssistantIntent';
 import { UserCategory } from '../models/Category';
 import { AuthRequest, requireAuth, signToken } from '../middleware/auth';
+import { entitlementPayload } from '../services/proEntitlements';
 
 const router = Router();
 
@@ -27,6 +28,37 @@ function validatePassword(password: string): string | null {
   if (!password) return 'Password is required';
   if (password.length > 72) return 'Password is too long';
   return null;
+}
+
+function publicUser(user: {
+  id?: string;
+  _id?: { toString(): string };
+  name: string;
+  email: string;
+  avatarColor: string;
+  role?: string;
+  notifyPartnerOnMyJointAdd?: boolean;
+  notifyMeOnPartnerJointAdd?: boolean;
+  proPlan?: string | null;
+  proStatus?: string | null;
+  proExpiresAt?: Date | null;
+  themePurchases?: Array<{
+    packId: string;
+    kind: string;
+    purchasedAt?: Date;
+    expiresAt?: Date | null;
+  }>;
+}) {
+  return {
+    id: user.id || String(user._id),
+    name: user.name,
+    email: user.email,
+    avatarColor: user.avatarColor,
+    role: user.role || 'user',
+    notifyPartnerOnMyJointAdd: user.notifyPartnerOnMyJointAdd !== false,
+    notifyMeOnPartnerJointAdd: user.notifyMeOnPartnerJointAdd !== false,
+    pro: entitlementPayload(user),
+  };
 }
 
 router.post('/register', async (req, res: Response) => {
@@ -89,13 +121,7 @@ router.post('/register', async (req, res: Response) => {
 
     res.status(201).json({
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        avatarColor: user.avatarColor,
-        role: user.role || 'user',
-      },
+      user: publicUser(user),
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -139,13 +165,7 @@ router.post('/login', async (req, res: Response) => {
 
     res.json({
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        avatarColor: user.avatarColor,
-        role: user.role || 'user',
-      },
+      user: publicUser(user),
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -161,17 +181,39 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
     res.json({
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        avatarColor: user.avatarColor,
-        role: user.role || 'user',
-      },
+      user: publicUser(user),
     });
   } catch (err) {
     console.error('Me error:', err);
     res.status(500).json({ error: 'Could not fetch profile' });
+  }
+});
+
+router.patch('/me', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await User.findById(req.user!.userId);
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const body = req.body as {
+      notifyPartnerOnMyJointAdd?: boolean;
+      notifyMeOnPartnerJointAdd?: boolean;
+    };
+
+    if (typeof body.notifyPartnerOnMyJointAdd === 'boolean') {
+      user.notifyPartnerOnMyJointAdd = body.notifyPartnerOnMyJointAdd;
+    }
+    if (typeof body.notifyMeOnPartnerJointAdd === 'boolean') {
+      user.notifyMeOnPartnerJointAdd = body.notifyMeOnPartnerJointAdd;
+    }
+
+    await user.save();
+    res.json({ user: publicUser(user) });
+  } catch (err) {
+    console.error('Patch me error:', err);
+    res.status(500).json({ error: 'Could not update preferences' });
   }
 });
 
@@ -211,16 +253,16 @@ router.delete('/me', requireAuth, async (req: AuthRequest, res: Response) => {
 
 /**
  * Wipe this user's app data but keep the login account.
- * Personal expenses, budget, Ask usage, custom categories — account stays.
+ * Personal expenses, budget, Ask misses, custom categories — account stays.
+ * Daily AI token usage is NOT reset (abuse prevention).
  */
 router.delete('/me/data', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
     const uid = new Types.ObjectId(userId);
 
-    const [expenses, usage, misses, categories] = await Promise.all([
+    const [expenses, misses, categories] = await Promise.all([
       PersonalExpense.deleteMany({ user: uid }),
-      AssistantUsage.deleteMany({ userId: String(userId) }),
       AssistantMiss.deleteMany({ userId: uid }),
       UserCategory.deleteMany({ user: uid }),
     ]);
@@ -234,7 +276,6 @@ router.delete('/me/data', requireAuth, async (req: AuthRequest, res: Response) =
       message: 'All personal data cleared; account kept',
       deleted: {
         expenses: expenses.deletedCount || 0,
-        assistantUsage: usage.deletedCount || 0,
         assistantMisses: misses.deletedCount || 0,
         customCategories: categories.deletedCount || 0,
       },

@@ -62,8 +62,8 @@ const SEED: SeedIntent[] = [
       'good morning', 'good evening', 'kaise ho',
     ]),
     templates: [
-      'Hey! Main Expenso Assistant hoon. Poochho: kitna kharch, budget, tips, “kya spending theek hai?”, average/day.',
-      'Namaste 👋 Spend, save tips, budget check, ya simple calcs — sab poochho.',
+      'Hey! I’m the Expenso Assistant. Ask about spend, budget left, saving tips, or “Is spending okay?”.',
+      'Namaste 👋 Spend, save tips, budget check, ya average/day — sab poochho.',
     ],
     chips: ['Kya spending theek?', 'Save kaise?', 'Roz kitna avg?'],
   },
@@ -75,7 +75,8 @@ const SEED: SeedIntent[] = [
       'உதவி', 'udhavi', 'సహాయం', 'sahayam', 'मदद',
     ]),
     templates: [
-      'Main yeh kar sakta hoon:\n• Kitna kharch (today/week/month)\n• Budget left + kya pace theek hai\n• Kahan zyada / kahan kaato\n• Save tips + 10–20% cut estimate\n• Avg/day, projected month, safe daily\n• Joint: maine / partner / kisne kitna\n\nTry: “kahan zyada ja raha” or “paisa kaise bachaye”',
+      'I can help with:\n• Spend totals (today / week / month)\n• Transfers by name\n• Spend on a date\n• Budget left & pace\n• Where you’re overspending\n• Saving tips & daily average\n• Joint: my share / partner / who spent what\n\nTry: “How much this month?” or “Is spending okay?”',
+      'Main yeh kar sakta hoon:\n• Kitna kharch (today/week/month)\n• “Rahul ko kitna bheja”\n• Date-wise spend\n• Budget left + pace\n• Kahan zyada / save tips\n• Joint: maine / partner / kisne kitna\n\nTry: “is month kitna” ya “kya spending theek?”',
     ],
     chips: ['Kahan zyada?', 'Save kaise?', 'Kya spending theek?'],
   },
@@ -85,7 +86,7 @@ const SEED: SeedIntent[] = [
     patterns: periodSpendPatterns(),
     templates: [
       '{period} total spend is {total} ({count} transactions) — {scope}.',
-      '{period} {total} spend ho chuka hai. Top: {topCategory} ({topCategoryAmount}).',
+      '{period} {total} kharch ho chuka hai ({count} entries). Top: {topCategory} ({topCategoryAmount}).',
     ],
     chips: ['Budget bacha?', 'Top category', 'Aaj kitna?'],
   },
@@ -97,8 +98,8 @@ const SEED: SeedIntent[] = [
       'today spent', 'aaj ka kharch', 'today total',
     ]),
     templates: [
-      'Today spend: {todayTotal}.',
-      'Aaj {todayTotal}. This month so far: {total}.',
+      'Today’s spend: {todayTotal}.',
+      'Aaj {todayTotal} kharch hua. Is month ab tak: {total}.',
     ],
     chips: ['Is month kitna?', 'Budget bacha?'],
   },
@@ -111,7 +112,7 @@ const SEED: SeedIntent[] = [
     ]),
     templates: [
       'Monthly budget {budget}. Used {budgetUsedPct}, left {remaining}.',
-      'Budget: {budget} · Used: {budgetUsedPct} · Remaining: {remaining}.',
+      'Budget {budget} hai · Used {budgetUsedPct} · Bacha {remaining}.',
     ],
     chips: ['Is month kitna kharch?', 'Top category'],
   },
@@ -126,8 +127,8 @@ const SEED: SeedIntent[] = [
       'budget hona chahiye', 'kitna budget hona', 'salary budget',
     ]),
     templates: [
-      'Salary amount batao (jaise “salary 50000”) — main 50/30/20 se ideal monthly budget suggest karunga.',
       'Tell me your salary figure (e.g. “salary 50k”) and I’ll suggest a monthly budget using 50/30/20.',
+      'Salary amount batao (jaise “salary 50000”) — main 50/30/20 se ideal monthly budget suggest karunga.',
     ],
     chips: ['Budget bacha?', 'Save kaise?', 'Kya spending theek?'],
   },
@@ -141,8 +142,8 @@ const SEED: SeedIntent[] = [
       'सबसे ज्यादा',
     ]),
     templates: [
+      'Top category {period}: {topCategory} ({topCategoryAmount}) of {total}.',
       '{period} sabse zyada {topCategory} — {topCategoryAmount}.',
-      'Top category: {topCategory} ({topCategoryAmount}) of {total}.',
     ],
     chips: ['2nd top category?', 'Top merchant', 'Is month kitna?'],
   },
@@ -156,8 +157,8 @@ const SEED: SeedIntent[] = [
       'dusre number pe category', 'second most spent',
     ]),
     templates: [
-      '{period} 2nd top category: {secondTopCategory} — {secondTopCategoryAmount}. (1st is {topCategory}).',
-      'Number 2: {secondTopCategory} ({secondTopCategoryAmount}). Top abhi {topCategory} hai.',
+      '{period} 2nd top category: {secondTopCategory} — {secondTopCategoryAmount}. (1st is {topCategory}.)',
+      '{period} 2nd top: {secondTopCategory} ({secondTopCategoryAmount}). Pehle number pe {topCategory} hai.',
     ],
     chips: ['Top category', 'Top merchant', 'Is month kitna?'],
   },
@@ -171,7 +172,7 @@ const SEED: SeedIntent[] = [
     ]),
     templates: [
       '{period} top merchant: {topMerchant} — {topMerchantAmount}.',
-      'Sabse zyada {topMerchant} pe ({topMerchantAmount}).',
+      '{period} sabse zyada {topMerchant} pe ({topMerchantAmount}).',
     ],
     chips: ['Top category', 'Sabse bada expense'],
   },
@@ -185,7 +186,7 @@ const SEED: SeedIntent[] = [
     ]),
     templates: [
       '{period} biggest expense: {biggest}.',
-      'Bada wala: {biggest}. Period total {total}.',
+      '{period} sabse bada: {biggest}. Period total {total}.',
     ],
     chips: ['Top category', 'Is month kitna?'],
   },
@@ -195,9 +196,45 @@ const SEED: SeedIntent[] = [
     patterns: categoryAskPatterns(),
     templates: [
       '{period} {category}: {categoryAmount}.',
-      '{category} pe {categoryAmount} ({period}). Total was {total}.',
+      '{period} {category} pe {categoryAmount}. Total tha {total}.',
     ],
     chips: ['Top category', 'Is month kitna?'],
+  },
+  {
+    key: 'by_merchant',
+    name: 'Transfer / pay to person or merchant',
+    patterns: uniq([
+      'ko kitna', 'ko kitne', 'ko send', 'ko bhej', 'ko diye', 'ko diya', 'ko transfer',
+      'kitna send', 'kitne send', 'kitna bhej', 'kitne bhej', 'kitna transfer',
+      'send kiye', 'send kiya', 'bhej diye', 'bhej diya', 'transfer kiye', 'transfer kiya',
+      'send to', 'paid to', 'pay to', 'transfer to', 'money to',
+      'maine ko kitna', 'mene ko kitna', 'how much did i send', 'how much sent to',
+      'how much paid to', 'total sent to', 'paisa bhej', 'paisa send',
+      'rs bhej', 'rs send', 'kitna diya', 'kitne diye',
+      'ab tak kitna bhej', 'is month kitna bhej', 'aaj kitna bhej',
+    ]),
+    templates: [
+      '{period}: {merchantAmount} to “{merchantQuery}” ({merchantCount} entries). Biggest: {biggest}.',
+      '{period} “{merchantQuery}” ko/pe {merchantAmount} ({merchantCount} entries).',
+    ],
+    chips: ['Is month kitna?', 'Ab tak kitna?', 'Top merchant'],
+  },
+  {
+    key: 'on_date',
+    name: 'Spend on a specific date',
+    patterns: uniq([
+      'is date', 'us date', 'us din', 'usi din', 'that day', 'on that day',
+      'tarikh ko', 'date ko', 'ko kitna hua', 'din kitna',
+      'spending on', 'spent on', 'expenses on', 'kharch on',
+      'kal kitna', 'yesterday spent', 'parson kitna',
+      '3 august', '15 august', 'august ko', 'tarikh kitna',
+      'is date ko kitna', 'us din kitna kharch', 'kisi date ko kitna',
+    ]),
+    templates: [
+      '{dateLabel} total: {dateTotal} ({dateCount} transactions). Biggest: {biggest}.',
+      '{dateLabel} ko {dateTotal} kharch hua ({dateCount} entries). Top: {topMerchant}.',
+    ],
+    chips: ['Is month kitna?', 'Aaj kitna?', 'Top category'],
   },
   {
     key: 'transaction_count',
@@ -208,6 +245,7 @@ const SEED: SeedIntent[] = [
     ]),
     templates: [
       '{period}: {count} transactions, total {total}.',
+      '{period} me {count} transactions hue, total {total} kharch.',
     ],
     chips: ['Is month kitna?', 'Top merchant'],
   },
@@ -219,7 +257,8 @@ const SEED: SeedIntent[] = [
       'shared expenses', 'ஜாயிண்ட்', 'జాయింట్', 'shared spend',
     ]),
     templates: [
-      '{scope} summary — {period}: {total} ({count} entries). Split: {memberSplit}.',
+      '{scope} summary for {period}: {total} ({count} entries). Split: {memberSplit}.',
+      'Joint summary ({period}): {total} ({count} entries). Dono ka split: {memberSplit}.',
     ],
     chips: ['Maine kitna?', 'Partner ne kitna?', 'Kisne kitna?'],
   },
@@ -233,8 +272,8 @@ const SEED: SeedIntent[] = [
       'என்ன செலவு', 'నా ఖర్చు', 'मेरा खर्च', 'मैंने कितना',
     ]),
     templates: [
+      '{period} you added {myTotal} ({myCount} entries). Joint total {total}.',
       '{period} tumhara add: {myTotal} ({myCount} entries). Joint total {total}.',
-      'Tumne {period} {myTotal} add kiya. Partner/others: {partnerTotal}.',
     ],
     chips: ['Partner ne kitna?', 'Kisne kitna?', 'Is month kitna?'],
   },
@@ -248,8 +287,8 @@ const SEED: SeedIntent[] = [
       'பார்ட்னர்', 'భాగస్వామి', 'पार्टनर ने कितना',
     ]),
     templates: [
-      '{period} {partnerName}: {partnerTotal} ({partnerCount} entries). Tumhara: {myTotal}.',
-      '{partnerName} ne {period} {partnerTotal} add kiya. Joint total {total}.',
+      '{period} {partnerName}: {partnerTotal} ({partnerCount} entries). Yours: {myTotal}.',
+      '{period} {partnerName} ne {partnerTotal} add kiya ({partnerCount} entries). Tumhara: {myTotal}.',
     ],
     chips: ['Maine kitna?', 'Kisne kitna?', 'Budget bacha?'],
   },
@@ -263,8 +302,8 @@ const SEED: SeedIntent[] = [
       'யார் எவ்வளவு', 'ఎవరు ఎంత', 'किसने कितना',
     ]),
     templates: [
-      '{period} member-wise: {memberSplit}. Joint total {total}.',
-      'Split ({period}): {memberSplit}.',
+      '{period} by member: {memberSplit}. Joint total {total}.',
+      '{period} kisne kitna: {memberSplit}. Joint total {total}.',
     ],
     chips: ['Maine kitna?', 'Partner ne kitna?', 'Account wise?'],
   },
@@ -277,8 +316,8 @@ const SEED: SeedIntent[] = [
       'joint accounts', 'each joint', 'account split',
     ]),
     templates: [
-      '{period} account-wise: {groupSplit}. Overall {total}.',
-      'Joint accounts ({period}): {groupSplit}.',
+      '{period} by account: {groupSplit}. Overall {total}.',
+      '{period} account-wise kharch: {groupSplit}. Overall {total}.',
     ],
     chips: ['Kisne kitna?', 'Maine kitna?', 'Is month kitna?'],
   },
@@ -292,8 +331,8 @@ const SEED: SeedIntent[] = [
       'खर्च कहां', 'ज्यादा कहां',
     ]),
     templates: [
+      '{period} highest category is {topCategory} ({topCategoryAmount}). Top merchant: {topMerchant} ({topMerchantAmount}). Start cutting there.',
       '{period} sabse zyada {topCategory} ({topCategoryAmount}). Merchant side: {topMerchant} ({topMerchantAmount}). Wahan se cut shuru karo.',
-      'Leak point: {topCategory} — {topCategoryAmount} of {total}. Biggest single: {biggest}.',
     ],
     chips: ['Save kaise?', '10 percent kaato', 'Kya spending theek?'],
   },
@@ -307,8 +346,8 @@ const SEED: SeedIntent[] = [
       'எப்படி சேமிப்பது', 'ఎలా సేవ్',
     ]),
     templates: [
-      'Tip: {topCategory} pe {topCategoryAmount} ja raha hai. 10% kaato → ~{topCut10} bachega; 20% → ~{topCut20}. {topMerchant} limit set karo.',
-      'Simple plan: (1) {topCategory} track karo (2) daily max ~{safeDaily} (3) impulse buys 24h delay. Budget left {remaining}.',
+      'Tip: {topCategory} is at {topCategoryAmount}. Cut 10% ≈ {topCut10} saved; 20% ≈ {topCut20}. Set a soft limit on {topMerchant}.',
+      'Tip: {topCategory} pe {topCategoryAmount} ja raha hai. 10% kaato → ~{topCut10} bachega; 20% → ~{topCut20}. {topMerchant} pe limit set karo.',
     ],
     chips: ['Kahan zyada?', 'Roz kitna avg?', 'Kya spending theek?'],
   },
@@ -320,8 +359,8 @@ const SEED: SeedIntent[] = [
       'expense tip', 'financial tip', 'thodi advice', 'smart spending tip',
     ]),
     templates: [
+      'Habit tip: review weekly — {topCategory} is highest. Cap subscriptions and food delivery. Safe daily ≈ {safeDaily}.',
       'Habit tip: weekly review karo — {topCategory} highest hai. Subscriptions + food delivery pe soft cap lagao. Daily safe ~{safeDaily}.',
-      'Rule of thumb: needs pehle, wants baad me. Abhi {budgetUsedPct} budget use. Small wins: carry less UPI impulse, cook 2 days/week.',
     ],
     chips: ['Save kaise?', 'Budget bacha?', 'Kahan zyada?'],
   },
@@ -336,8 +375,8 @@ const SEED: SeedIntent[] = [
       'क्या सही खर्च', 'ठीक चल रहा',
     ]),
     templates: [
+      '{healthVerdict} Ideal so far ~{idealSpendSoFar}; actual this month {total}. Safe/day now ~{safeDaily} ({daysLeft} days left).',
       '{healthVerdict} Ideal ab tak ~{idealSpendSoFar}; actual month {total}. Safe/day ab ~{safeDaily} ({daysLeft} days left).',
-      '{healthVerdict} Projected month-end ~{projectedMonth} vs budget {budget}.',
     ],
     chips: ['Save kaise?', 'Roz kitna avg?', 'Budget bacha?'],
   },
@@ -350,8 +389,8 @@ const SEED: SeedIntent[] = [
       'रोज कितना', 'प्रति दिन',
     ]),
     templates: [
+      'This month so far, avg/day ≈ {avgPerDay} (day {dayOfMonth}/{daysInMonth}). Ideal daily budget ≈ {dailyBudget}.',
       'Is month ab tak avg/day ~{avgPerDay} (day {dayOfMonth}/{daysInMonth}). Budget daily ideal ~{dailyBudget}.',
-      'Average transaction ~{avgTxn}. Daily pace {avgPerDay}; safe remaining/day ~{safeDaily}.',
     ],
     chips: ['Projected month?', 'Kya spending theek?', 'Budget bacha?'],
   },
@@ -364,8 +403,8 @@ const SEED: SeedIntent[] = [
       'माह के अंत',
     ]),
     templates: [
-      'Is pace pe month-end ~{projectedMonth} (avg/day {avgPerDay}). Budget {budget}, left {remaining}.',
-      'Projection ~{projectedMonth}. Ideal so far {idealSpendSoFar}; actual month total {total}.',
+      'At this pace, month-end ≈ {projectedMonth} (avg/day {avgPerDay}). Budget {budget}, left {remaining}.',
+      'Is pace pe month-end ~{projectedMonth} (avg/day {avgPerDay}). Budget {budget}, bacha {remaining}.',
     ],
     chips: ['Kya spending theek?', 'Save kaise?', 'Roz kitna avg?'],
   },
@@ -378,8 +417,8 @@ const SEED: SeedIntent[] = [
       'आज कितना खर्च',
     ]),
     templates: [
-      'Ab se safe ~{safeDaily}/day for {daysLeft} days left (budget left {remaining}).',
-      'Daily budget ideal {dailyBudget}; remaining pace {safeDaily}/day. Today already {todayTotal}.',
+      'From now, safe ≈ {safeDaily}/day for {daysLeft} days left (budget left {remaining}).',
+      'Abhi se safe ~{safeDaily}/day rakho — {daysLeft} days bache hain (budget bacha {remaining}).',
     ],
     chips: ['Budget bacha?', 'Kya spending theek?', 'Projected month?'],
   },
@@ -392,8 +431,8 @@ const SEED: SeedIntent[] = [
       '10% ', '20% ',
     ]),
     templates: [
+      'A 10% cut on {topCategory} ≈ {topCut10} saved; 20% ≈ {topCut20}. You’re at {topCategoryAmount} there now.',
       '{topCategory} se 10% cut ≈ {topCut10} save; 20% ≈ {topCut20}. Abhi us pe {topCategoryAmount}.',
-      'Easy win: {topMerchant} ({topMerchantAmount}) pe soft limit — 10–20% cut se {topCut10}–{topCut20} bachega.',
     ],
     chips: ['Save kaise?', 'Kahan zyada?', 'Kya spending theek?'],
   },
@@ -404,7 +443,8 @@ const SEED: SeedIntent[] = [
       'budget tip', 'control kharch', 'kharch kam',
     ]),
     templates: [
-      '{period} {topCategory} highest ({topCategoryAmount}). Cut thoda — left {remaining}. Safe/day {safeDaily}.',
+      '{period} {topCategory} is highest ({topCategoryAmount}). Trim a bit — left {remaining}. Safe/day {safeDaily}.',
+      '{period} {topCategory} highest hai ({topCategoryAmount}). Thoda kaato — bacha {remaining}. Safe/day {safeDaily}.',
     ],
     chips: ['Save kaise?', 'Kahan zyada?'],
   },
@@ -428,14 +468,16 @@ export async function seedAssistantIntents(): Promise<void> {
         { upsert: true, new: true },
       );
     } else {
-      // Preserve admin edits — only insert missing intents
+      // Preserve admin pattern/chip edits — always refresh reply templates (grammar + EN/HI pairs)
       await AssistantIntent.findOneAndUpdate(
         { key: item.key },
         {
+          $set: {
+            templates: item.templates,
+          },
           $setOnInsert: {
             name: item.name,
             patterns: item.patterns,
-            templates: item.templates,
             chips: item.chips || [],
             active: true,
           },
@@ -447,6 +489,6 @@ export async function seedAssistantIntents(): Promise<void> {
   const totalPatterns = SEED.reduce((s, i) => s + i.patterns.length, 0);
   console.log(
     `✅ Assistant intents seeded (${SEED.length} intents, ${totalPatterns} patterns` +
-      `${overwrite ? ', overwrite=ON' : ', admin-safe'})`,
+      `${overwrite ? ', overwrite=ON' : ', templates refreshed, admin-safe patterns'})`,
   );
 }

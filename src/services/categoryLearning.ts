@@ -8,6 +8,12 @@ const VALID = new Set([
   'transport',
   'entertainment',
   'bills',
+  'rent',
+  'taxes',
+  'gifts',
+  'donation',
+  'insurance',
+  'personal_care',
   'health',
   'other',
 ]);
@@ -49,13 +55,55 @@ const SEED_TERMS: Array<{ term: string; category: string }> = [
   { term: 'wifi', category: 'bills' },
   { term: 'broadband', category: 'bills' },
   { term: 'internet', category: 'bills' },
-  { term: 'rent', category: 'bills' },
-  { term: 'kiraya', category: 'bills' },
   { term: 'emi', category: 'bills' },
   { term: 'recharge', category: 'bills' },
   { term: 'dth', category: 'bills' },
   { term: 'maintenance', category: 'bills' },
   { term: 'society maintenance', category: 'bills' },
+
+  // Rent
+  { term: 'rent', category: 'rent' },
+  { term: 'kiraya', category: 'rent' },
+  { term: 'house rent', category: 'rent' },
+  { term: 'pg rent', category: 'rent' },
+  { term: 'hostel', category: 'rent' },
+
+  // Taxes
+  { term: 'tax', category: 'taxes' },
+  { term: 'taxes', category: 'taxes' },
+  { term: 'gst', category: 'taxes' },
+  { term: 'tds', category: 'taxes' },
+  { term: 'income tax', category: 'taxes' },
+  { term: 'property tax', category: 'taxes' },
+
+  // Gifts
+  { term: 'gift', category: 'gifts' },
+  { term: 'gifts', category: 'gifts' },
+  { term: 'present', category: 'gifts' },
+  { term: 'birthday gift', category: 'gifts' },
+
+  // Donation
+  { term: 'donation', category: 'donation' },
+  { term: 'donate', category: 'donation' },
+  { term: 'charity', category: 'donation' },
+  { term: 'daan', category: 'donation' },
+  { term: 'ngo', category: 'donation' },
+
+  // Insurance
+  { term: 'insurance', category: 'insurance' },
+  { term: 'premium', category: 'insurance' },
+  { term: 'term plan', category: 'insurance' },
+  { term: 'health insurance', category: 'insurance' },
+  { term: 'life insurance', category: 'insurance' },
+
+  // Personal care
+  { term: 'salon', category: 'personal_care' },
+  { term: 'spa', category: 'personal_care' },
+  { term: 'haircut', category: 'personal_care' },
+  { term: 'grooming', category: 'personal_care' },
+  { term: 'cosmetics', category: 'personal_care' },
+  { term: 'skincare', category: 'personal_care' },
+  { term: 'parlour', category: 'personal_care' },
 
   // Food dishes / common names
   { term: 'pizza', category: 'food' },
@@ -188,29 +236,45 @@ function extractTerms(merchantLabel: string, note?: string): string[] {
 
 export async function seedCategoryTerms(): Promise<void> {
   let upserts = 0;
+  let refreshed = 0;
   for (const s of SEED_TERMS) {
     const term = normalizeCategoryTerm(s.term);
     if (!term || !VALID.has(s.category)) continue;
-    const res = await CategoryTerm.updateOne(
-      { term },
-      {
-        $setOnInsert: {
-          term,
-          category: s.category,
-          weight: 100,
-          votes: [{ category: s.category, count: 50, userIds: [] }],
-          source: 'seed',
-          active: true,
-          conflict: false,
+    const existing = await CategoryTerm.findOne({ term }).lean();
+    if (!existing) {
+      await CategoryTerm.create({
+        term,
+        category: s.category,
+        weight: 100,
+        votes: [{ category: s.category, count: 50, userIds: [] }],
+        source: 'seed',
+        active: true,
+        conflict: false,
+      });
+      upserts += 1;
+      continue;
+    }
+    // Keep built-in seeds aligned when we split categories (e.g. rent out of bills)
+    if (existing.source === 'seed' && existing.category !== s.category) {
+      await CategoryTerm.updateOne(
+        { term, source: 'seed' },
+        {
+          $set: {
+            category: s.category,
+            weight: Math.max(existing.weight || 0, 100),
+            active: true,
+            conflict: false,
+            votes: [{ category: s.category, count: 50, userIds: [] }],
+          },
         },
-      },
-      { upsert: true },
-    );
-    if (res.upsertedCount) upserts += 1;
+      );
+      refreshed += 1;
+    }
   }
   console.log(
     `✅ Category terms ready (${SEED_TERMS.length} seed phrases` +
-      `${upserts ? `, +${upserts} new` : ''})`,
+      `${upserts ? `, +${upserts} new` : ''}` +
+      `${refreshed ? `, ${refreshed} refreshed` : ''})`,
   );
 }
 
@@ -360,7 +424,7 @@ export async function resolveCategoryConflicts(limit = 8): Promise<{
             role: 'system',
             content:
               'You classify expense keywords into ONE category. ' +
-              'Allowed categories only: food, groceries, shopping, transport, entertainment, bills, health, other. ' +
+              'Allowed categories only: food, groceries, shopping, transport, entertainment, bills, rent, taxes, gifts, donation, insurance, personal_care, health, other. ' +
               'Reply with ONLY the category slug, nothing else.',
           },
           {

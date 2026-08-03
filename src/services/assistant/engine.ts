@@ -14,6 +14,7 @@ import {
   FALLBACK_CHIPS_BY_LANG,
   llmReplyInstruction,
   pickLocalizedChips,
+  pickTemplateForLang,
   resolveLangPolicy,
   ChatLang,
   LangPolicy,
@@ -25,6 +26,12 @@ import {
   isSalaryBudgetQuestion,
 } from './salaryBudget';
 import {
+  detectCalendarDate,
+  detectMerchantFromExpenses,
+  isOnDateQuestion,
+  isTransferQuestion,
+} from './transferDate';
+import {
   aiEnabled,
   consumeTokens,
   costForInput,
@@ -32,6 +39,7 @@ import {
   refundTokens,
   tokenCost,
 } from './usage';
+import { buildQaLearningPrompt, learnFromLlmExchange } from './qaLearning';
 
 export type ChatResult = {
   reply: string;
@@ -120,17 +128,22 @@ function scoreIntent(messageRaw: string, patterns: string[]): number {
   return best;
 }
 
-function pickTemplate(templates: string[]): string {
-  if (!templates.length) return 'Hmm, data ke hisaab se abhi clear jawab nahi de paya.';
-  return templates[Math.floor(Math.random() * templates.length)];
+function pickTemplate(templates: string[] | undefined, lang: ChatLang): string {
+  return pickTemplateForLang(templates, lang);
 }
 
 const FALLBACK_CHIPS = FALLBACK_CHIPS_BY_LANG.en;
 
-const EMPTY_REPLIES = [
-  'Abhi is period me koi expense nahi mila. Pehle kuch add karo, phir poochho!',
-  'Data empty hai — ek-do expenses add karke dobara try karo.',
-];
+const EMPTY_REPLIES: Record<ChatLang, string[]> = {
+  en: [
+    'No expenses found for this period. Add a few first, then ask again.',
+    'Nothing logged here yet — add one or two expenses and try again.',
+  ],
+  hi: [
+    'Abhi is period me koi expense nahi mila. Pehle kuch add karo, phir poochho!',
+    'Data empty hai — ek-do expenses add karke dobara try karo.',
+  ],
+};
 
 function withTokens(
   result: Omit<ChatResult, 'tokensRemaining' | 'tokensLimit' | 'tokenCost' | 'aiRemaining' | 'lang'>,
@@ -163,6 +176,12 @@ function statsBrief(stats: Stats): string {
     `count=${stats.count}`,
     `topCategory=${stats.topCategory || 'n/a'} (${formatINR(stats.topCategoryAmount)})`,
     `topMerchant=${stats.topMerchant || 'n/a'} (${formatINR(stats.topMerchantAmount)})`,
+    stats.merchantQuery
+      ? `merchantMatch=${stats.merchantQuery} amount=${formatINR(stats.merchantAmount)} count=${stats.merchantCount}`
+      : null,
+    stats.dateLabel
+      ? `date=${stats.dateLabel} total=${formatINR(stats.dateTotal)} count=${stats.dateCount}`
+      : null,
     `budget=${formatINR(stats.budget)}`,
     `remaining=${stats.remaining != null ? formatINR(stats.remaining) : 'n/a'}`,
     `budgetUsedPct=${stats.budgetUsedPct ?? 'n/a'}`,
@@ -178,7 +197,9 @@ function statsBrief(stats: Stats): string {
     `pace=${stats.paceStatus}`,
     `health=${stats.healthVerdict}`,
     `daysLeft=${stats.daysLeft}`,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** Compact recent ledger for precise AI — never shown to the user in the UI. */
@@ -257,12 +278,14 @@ export async function runPreciseAnswer(input: {
     monthlyBudget: input.monthlyBudget || 0,
     isJoint: input.isJoint,
     currentUserId: input.userId,
+    lang,
   });
   const statsAll = computeStats(input.expenses || [], {
     period: 'all',
     monthlyBudget: input.monthlyBudget || 0,
     isJoint: input.isJoint,
     currentUserId: input.userId,
+    lang,
   });
 
   const cost = costForInput('keyboard', 'ai');
@@ -287,6 +310,7 @@ export async function runPreciseAnswer(input: {
   try {
     const prior = historyBrief(input.history || [], 6);
     const ledger = expensesBrief(input.expenses || [], 50);
+    const qaHint = await buildQaLearningPrompt(input.message.trim());
     const { text } = await completeChat([
       {
         role: 'system',
@@ -297,7 +321,8 @@ export async function runPreciseAnswer(input: {
           'Use the verified stats AND the recent expense ledger. Never invent amounts. ' +
           'Do NOT mention that you were given a data dump, ledger, JSON, or private payload — just answer naturally. ' +
           'If the previous reply was incomplete or wrong, correct it briefly then give the better answer. ' +
-          'Be specific with ₹ figures from the data. Keep under 110 words. No markdown.',
+          'Be specific with ₹ figures from the data. Keep under 110 words. No markdown.' +
+          (qaHint ? `\n\n${qaHint}` : ''),
       },
       {
         role: 'user',
@@ -313,9 +338,17 @@ export async function runPreciseAnswer(input: {
       },
     ]);
 
+    const reply = text.slice(0, 1200);
+    void learnFromLlmExchange({
+      question: input.message.trim(),
+      answer: reply,
+      source: 'precise',
+      userId: input.userId,
+    });
+
     return withTokens(
       {
-        reply: text.slice(0, 1200),
+        reply,
         intent: 'llm_precise',
         chips: FALLBACK_CHIPS_BY_LANG[lang],
         matched: true,
@@ -384,10 +417,12 @@ async function llmFallbackReply(input: {
         'Do NOT repeat the same mistaken interpretation (e.g. do not push joint-account setup unless they clearly asked). ' +
         'Re-read their original question and answer that. Apologize briefly in one short clause, then give the correct answer. '
       : '';
+    const learnQuestion = (input.priorQuestion || input.userMessage || '').trim();
     const questionBlock = input.priorQuestion
       ? `Original question: ${input.priorQuestion}\nUser follow-up/correction: ${input.userMessage}`
       : `Current question: ${input.userMessage}`;
 
+    const qaHint = await buildQaLearningPrompt(learnQuestion);
     const { text } = await completeChat([
       {
         role: 'system',
@@ -399,7 +434,8 @@ async function llmFallbackReply(input: {
           'Use recent chat if the user asks a follow-up (e.g. maine/partner/aur aaj). ' +
           'You can give short save tips, budget pace judgment, salary→budget rules of thumb (50/30/20), and simple calcs from the stats. ' +
           'For joint accounts use myTotal / partner / memberSplit / groupSplit when relevant. ' +
-          'Keep reply under 80 words. If data is missing, say so. No markdown.',
+          'Keep reply under 80 words. If data is missing, say so. No markdown.' +
+          (qaHint ? `\n\n${qaHint}` : ''),
       },
       {
         role: 'user',
@@ -409,9 +445,17 @@ async function llmFallbackReply(input: {
       },
     ]);
 
+    const reply = text.slice(0, 800);
+    void learnFromLlmExchange({
+      question: learnQuestion,
+      answer: reply,
+      source: 'llm',
+      userId: input.userId,
+    });
+
     return withTokens(
       {
-        reply: text.slice(0, 800),
+        reply,
         intent: input.correction ? 'llm_correction' : 'llm_assist',
         chips: FALLBACK_CHIPS_BY_LANG[lang],
         matched: true,
@@ -431,9 +475,8 @@ async function spendRules(
   userId: string | undefined,
   inputMode: 'keyboard' | 'chip',
 ): Promise<{ ok: boolean; remaining: number; limit: number; cost: number }> {
-  const limit = dailyTokenLimit();
   if (!userId) {
-    return { ok: true, remaining: limit, limit, cost: 0 };
+    return { ok: false, remaining: 0, limit: 0, cost: 0 };
   }
   const cost = costForInput(inputMode, 'rules');
   const res = await consumeTokens(userId, cost);
@@ -442,6 +485,25 @@ async function spendRules(
     remaining: res.remaining,
     limit: res.limit,
     cost: res.ok ? res.cost : 0,
+  };
+}
+
+function tokenGateReply(lang: 'en' | 'hi', limit: number): { reply: string; intent: string } {
+  if (limit <= 0) {
+    return {
+      reply:
+        lang === 'en'
+          ? 'Ask Expenso is a Pro feature. Upgrade to unlock AI chat, chips, and daily tokens.'
+          : 'Ask Expenso Pro feature hai. Upgrade karke AI chat, chips aur daily tokens unlock karo.',
+      intent: 'pro_required',
+    };
+  }
+  return {
+    reply:
+      lang === 'en'
+        ? `Today's ${limit} tokens are used up. Resets tomorrow.`
+        : `Aaj ke ${limit} tokens khatam. Kal reset hoga.`,
+    intent: 'token_limit',
   };
 }
 
@@ -546,6 +608,7 @@ export async function runAssistantChat(input: {
     monthlyBudget: input.monthlyBudget || 0,
     isJoint: input.isJoint,
     currentUserId: input.userId,
+    lang,
   });
 
   const priorUserQ = [...history].reverse().find(h => h.role === 'user')?.text;
@@ -571,13 +634,11 @@ export async function runAssistantChat(input: {
     // Unknown without AI — still a rules-ish soft reply; charge slow keyboard cost
     const soft = await spendRules(input.userId, inputMode);
     if (!soft.ok) {
+      const gate = tokenGateReply(lang, soft.limit);
       return wt(
         {
-          reply:
-            lang === 'en'
-              ? `Today's ${soft.limit} tokens are used up. Resets tomorrow.`
-              : `Aaj ke ${soft.limit} tokens khatam. Kal reset — chips try karo ya kal wapas aao.`,
-          intent: 'token_limit',
+          reply: gate.reply,
+          intent: gate.intent,
           chips: FALLBACK_CHIPS_BY_LANG[lang],
           matched: false,
           source: 'fallback',
@@ -603,13 +664,11 @@ export async function runAssistantChat(input: {
   // Matched rules path — spend cheap tokens
   const spend = await spendRules(input.userId, inputMode);
   if (!spend.ok) {
+    const gate = tokenGateReply(lang, spend.limit);
     return wt(
       {
-        reply:
-          lang === 'en'
-            ? `Today's ${spend.limit} tokens are used up. Resets tomorrow.`
-            : `Aaj ke ${spend.limit} tokens khatam ho gaye. Kal reset hoga — thoda break lo ☕`,
-        intent: 'token_limit',
+        reply: gate.reply,
+        intent: gate.intent,
         chips: FALLBACK_CHIPS_BY_LANG[lang],
         matched: false,
         source: 'fallback',
@@ -635,10 +694,37 @@ export async function runAssistantChat(input: {
   if (monthIntents.includes(bestKey) && !follow.forcedPeriod) period = 'month';
 
   const categoryId = detectCategory(scoreText) || detectCategory(input.message);
+  const merchantHit =
+    detectMerchantFromExpenses(scoreText, input.expenses || []) ||
+    detectMerchantFromExpenses(input.message, input.expenses || []);
+  const calendarDay =
+    detectCalendarDate(scoreText) || detectCalendarDate(input.message);
 
   let intentKey = bestKey;
   let doc = bestDoc;
-  if (bestKey === 'by_category' && !categoryId) {
+
+  // Entity extractors can upgrade a weak/wrong match
+  if (
+    (isTransferQuestion(scoreText) || isTransferQuestion(input.message) || intentKey === 'by_merchant') &&
+    merchantHit
+  ) {
+    const mDoc = intents.find(i => i.key === 'by_merchant');
+    if (mDoc) {
+      intentKey = 'by_merchant';
+      doc = mDoc;
+    }
+  } else if (
+    (isOnDateQuestion(scoreText) || isOnDateQuestion(input.message) || intentKey === 'on_date') &&
+    calendarDay
+  ) {
+    const dDoc = intents.find(i => i.key === 'on_date');
+    if (dDoc) {
+      intentKey = 'on_date';
+      doc = dDoc;
+    }
+  }
+
+  if (bestKey === 'by_category' && !categoryId && intentKey === 'by_category') {
     const top = intents.find(i => i.key === 'top_category');
     if (top) {
       intentKey = 'top_category';
@@ -683,8 +769,10 @@ export async function runAssistantChat(input: {
           salaryDoc?.templates?.length
             ? salaryDoc.templates
             : [
+                'Tell me your salary (e.g. “salary 50000”) and I’ll suggest an ideal monthly budget using 50/30/20.',
                 'Salary amount batao (jaise “salary 50000”) — main 50/30/20 se ideal monthly budget suggest karunga.',
               ],
+          lang,
         ),
         intent: 'salary_budget',
         chips: salaryDoc?.chips?.length
@@ -697,11 +785,114 @@ export async function runAssistantChat(input: {
     );
   }
 
+  // Transfer to person/merchant — need a name
+  if (intentKey === 'by_merchant') {
+    if (!merchantHit) {
+      return wt(
+        {
+          reply:
+            lang === 'en'
+              ? 'Who did you send to? Try “how much did I send to Rahul” or “Rahul ko kitna bheja this month”.'
+              : 'Kis naam pe? Jaise “maine Rahul ko kitne bheje” ya “Priya ko is month kitna send kiya”.',
+          intent: 'by_merchant',
+          chips: doc?.chips?.length ? doc.chips : ['Is month kitna?', 'Ab tak kitna?', 'Top merchant'],
+          matched: true,
+          source: 'rules',
+        },
+        spend,
+      );
+    }
+
+    const stats = computeStats(input.expenses || [], {
+      period: calendarDay ? 'all' : period,
+      merchantQuery: merchantHit.query,
+      calendarDay,
+      monthlyBudget: input.monthlyBudget || 0,
+      isJoint: input.isJoint,
+      currentUserId: input.userId,
+      lang,
+    });
+
+    return wt(
+      {
+        reply: fillTemplate(
+          pickTemplate(
+            doc?.templates?.length
+              ? doc.templates
+              : [
+                  '{period}: {merchantAmount} to “{merchantQuery}” ({merchantCount} entries).',
+                  '{period} “{merchantQuery}” ko/pe {merchantAmount} ({merchantCount} entries).',
+                ],
+            lang,
+          ),
+          stats,
+        ),
+        intent: 'by_merchant',
+        chips: doc?.chips?.length ? doc.chips : ['Is month kitna?', 'Ab tak kitna?', 'Top merchant'],
+        matched: true,
+        source: 'rules',
+      },
+      spend,
+    );
+  }
+
+  // Specific calendar day analysis
+  if (intentKey === 'on_date') {
+    if (!calendarDay) {
+      return wt(
+        {
+          reply:
+            lang === 'en'
+              ? 'Which date? Try “3 August ko kitna”, “15/08 spending”, or “kal kitna hua”.'
+              : 'Kaunsi date? Jaise “3 August ko kitna hua”, “15 tarikh ko kitna”, ya “kal kitna”.',
+          intent: 'on_date',
+          chips: doc?.chips?.length ? doc.chips : ['Aaj kitna?', 'Is month kitna?', 'Top category'],
+          matched: true,
+          source: 'rules',
+        },
+        spend,
+      );
+    }
+
+    const stats = computeStats(input.expenses || [], {
+      period: 'all',
+      calendarDay,
+      monthlyBudget: input.monthlyBudget || 0,
+      isJoint: input.isJoint,
+      currentUserId: input.userId,
+      lang,
+    });
+
+    return wt(
+      {
+        reply: fillTemplate(
+          pickTemplate(
+            doc?.templates?.length
+              ? doc.templates
+              : [
+                  '{dateLabel} total: {dateTotal} ({dateCount} transactions). Biggest: {biggest}.',
+                  '{dateLabel} ko {dateTotal} kharch hua ({dateCount} entries). Top: {topMerchant}.',
+                ],
+            lang,
+          ),
+          stats,
+        ),
+        intent: 'on_date',
+        chips: doc?.chips?.length ? doc.chips : ['Is month kitna?', 'Aaj kitna?', 'Top category'],
+        matched: true,
+        source: 'rules',
+      },
+      spend,
+    );
+  }
+
   if (jointOnly.includes(intentKey) && !input.isJoint) {
     return wt(
       {
         reply:
-          'Ye sawaal joint account ke liye hai. Pehle Profile se joint banao / join karo, phir “maine kitna” ya “partner ne kitna” poochho.',
+          lang === 'en'
+            ? 'This question is for a joint account. Create or join a joint from Profile, then ask “How much did I spend?” or “Partner spend?”.'
+            : 'Ye sawaal joint account ke liye hai. Pehle Profile se joint banao / join karo, phir “maine kitna” ya “partner ne kitna” poochho.',
         intent: intentKey,
         chips: ['Is month kitna kharch?', 'Budget bacha?', 'Top category'],
         matched: true,
@@ -717,6 +908,7 @@ export async function runAssistantChat(input: {
     monthlyBudget: input.monthlyBudget || 0,
     isJoint: input.isJoint,
     currentUserId: input.userId,
+    lang,
   });
 
   const allowEmpty = [
@@ -730,7 +922,7 @@ export async function runAssistantChat(input: {
   if (stats.count === 0 && !allowEmpty.includes(intentKey)) {
     return wt(
       {
-        reply: pickTemplate(EMPTY_REPLIES),
+        reply: pickTemplate(EMPTY_REPLIES[lang], lang),
         intent: intentKey,
         chips: doc.chips?.length ? doc.chips : FALLBACK_CHIPS,
         matched: true,
@@ -747,7 +939,9 @@ export async function runAssistantChat(input: {
     return wt(
       {
         reply:
-          'Abhi monthly budget set nahi hai. Home pe Budget save karo — phir main pace, safe/day aur “kya spending theek” bataunga.',
+          lang === 'en'
+            ? 'No monthly budget is set yet. Save a budget on Home — then I can show pace, safe daily spend, and whether spending looks healthy.'
+            : 'Abhi monthly budget set nahi hai. Home pe Budget save karo — phir main pace, safe/day aur “kya spending theek” bataunga.',
         intent: intentKey,
         chips: ['Is month kitna kharch?', 'Save kaise?', 'Top category'],
         matched: true,
@@ -761,7 +955,9 @@ export async function runAssistantChat(input: {
     return wt(
       {
         reply:
-          'Tip: pehle 7 din expenses add karo, monthly budget set karo, phir weekly 10-min review. Food delivery + impulse UPI pe soft limit rakho.',
+          lang === 'en'
+            ? 'Tip: log expenses for a week, set a monthly budget, then do a 10-minute weekly review. Put soft limits on food delivery and impulse UPI spends.'
+            : 'Tip: pehle 7 din expenses add karo, monthly budget set karo, phir weekly 10-min review. Food delivery + impulse UPI pe soft limit rakho.',
         intent: intentKey,
         chips: doc.chips?.length ? doc.chips : FALLBACK_CHIPS,
         matched: true,
@@ -778,7 +974,9 @@ export async function runAssistantChat(input: {
     return wt(
       {
         reply:
-          'Joint expenses me abhi member info incomplete hai. Naye expenses add karo — phir maine / partner / kisne kitna clear dikhega.',
+          lang === 'en'
+            ? 'Member info on joint expenses is incomplete. Add a few new expenses — then I can show your share vs partner clearly.'
+            : 'Joint expenses me abhi member info incomplete hai. Naye expenses add karo — phir maine / partner / kisne kitna clear dikhega.',
         intent: intentKey,
         chips: doc.chips?.length ? doc.chips : FALLBACK_CHIPS,
         matched: true,
@@ -788,7 +986,7 @@ export async function runAssistantChat(input: {
     );
   }
 
-  const reply = fillTemplate(pickTemplate(doc.templates || []), stats);
+  const reply = fillTemplate(pickTemplate(doc.templates || [], lang), stats);
 
   return wt(
     {

@@ -3,6 +3,11 @@ import {
   PERIOD_SYNONYMS,
   textIncludesAny,
 } from './lexicon';
+import {
+  CalendarDay,
+  expenseMatchesMerchant,
+  expenseOnDay,
+} from './transferDate';
 
 export type ExpenseInput = {
   amount: number;
@@ -41,6 +46,12 @@ const CATEGORY_LABELS: Record<string, string> = {
   transport: 'Transport',
   entertainment: 'Entertainment',
   bills: 'Bills',
+  rent: 'Rent',
+  taxes: 'Taxes',
+  gifts: 'Gifts',
+  donation: 'Donation',
+  insurance: 'Insurance',
+  personal_care: 'Personal Care',
   health: 'Health',
   other: 'Other',
 };
@@ -225,6 +236,12 @@ export type Stats = {
   biggest: ExpenseInput | null;
   categoryAmount: number | null;
   categoryId: string | null;
+  merchantQuery: string | null;
+  merchantAmount: number;
+  merchantCount: number;
+  dateLabel: string | null;
+  dateTotal: number;
+  dateCount: number;
   budget: number;
   remaining: number | null;
   budgetUsedPct: number | null;
@@ -252,12 +269,20 @@ export type Stats = {
   healthVerdict: string;
 };
 
-const PERIOD_LABEL: Record<Period, string> = {
-  today: 'today / aaj',
+const PERIOD_LABEL_EN: Record<Period, string> = {
+  today: 'today',
   week: 'this week',
   month: 'this month',
   year: 'this year',
   all: 'overall',
+};
+
+const PERIOD_LABEL_HI: Record<Period, string> = {
+  today: 'aaj',
+  week: 'is week',
+  month: 'is month',
+  year: 'is saal',
+  all: 'ab tak',
 };
 
 export function computeStats(
@@ -265,12 +290,26 @@ export function computeStats(
   opts: {
     period: Period;
     categoryId?: string | null;
+    merchantQuery?: string | null;
+    calendarDay?: CalendarDay | null;
     monthlyBudget?: number;
     isJoint?: boolean;
     currentUserId?: string;
+    /** Reply language for period labels + health verdict */
+    lang?: 'en' | 'hi';
   },
 ): Stats {
-  const periodList = filterByPeriod(expenses, opts.period);
+  const lang = opts.lang === 'hi' ? 'hi' : 'en';
+  const PERIOD_LABEL = lang === 'hi' ? PERIOD_LABEL_HI : PERIOD_LABEL_EN;
+  // Specific calendar day overrides relative period for the main list
+  let periodList = opts.calendarDay
+    ? expenses.filter(e => expenseOnDay(e, opts.calendarDay!))
+    : filterByPeriod(expenses, opts.period);
+
+  if (opts.merchantQuery) {
+    periodList = periodList.filter(e => expenseMatchesMerchant(e, opts.merchantQuery!));
+  }
+
   const todayList = filterByPeriod(expenses, 'today');
   const total = periodList.reduce((s, e) => s + (e.amount || 0), 0);
   const todayTotal = todayList.reduce((s, e) => s + (e.amount || 0), 0);
@@ -291,8 +330,16 @@ export function computeStats(
 
   let categoryAmount: number | null = null;
   if (opts.categoryId) {
+    // Category amount within the already-filtered period/day/merchant list
     categoryAmount = catMap.get(opts.categoryId) || 0;
   }
+
+  const merchantQuery = opts.merchantQuery?.trim() || null;
+  const merchantAmount = merchantQuery ? total : 0;
+  const merchantCount = merchantQuery ? periodList.length : 0;
+  const dateLabel = opts.calendarDay?.label || null;
+  const dateTotal = opts.calendarDay ? total : 0;
+  const dateCount = opts.calendarDay ? periodList.length : 0;
 
   const budget = opts.monthlyBudget || 0;
   const monthTotal = filterByPeriod(expenses, 'month').reduce((s, e) => s + e.amount, 0);
@@ -316,27 +363,46 @@ export function computeStats(
   const safeDaily = remaining != null && daysLeft > 0 ? remaining / daysLeft : dailyBudget;
 
   let paceStatus: Stats['paceStatus'] = 'no_budget';
-  let healthVerdict = 'Pehle monthly budget set karo — phir main bataunga spending theek hai ya nahi.';
+  let healthVerdict =
+    lang === 'en'
+      ? 'Set a monthly budget first — then I can tell you if spending looks healthy.'
+      : 'Pehle monthly budget set karo — phir main bataunga spending theek hai ya nahi.';
   if (budget > 0) {
     const usedIdealPct = idealSpendSoFar > 0 ? monthTotal / idealSpendSoFar : 1;
     if (monthTotal > budget) {
       paceStatus = 'over_budget';
-      healthVerdict = `Budget already cross — used ${budgetUsedPct}%. Ab sirf zaroori kharch.`;
+      healthVerdict =
+        lang === 'en'
+          ? `You're over budget — ${budgetUsedPct}% used. Stick to essentials for now.`
+          : `Budget cross ho chuka hai — ${budgetUsedPct}% use ho gaya. Ab sirf zaroori kharch karo.`;
     } else if (usedIdealPct > 1.15) {
       paceStatus = 'fast';
-      healthVerdict = `Pace tez hai — aaj tak ideal ~${formatINR(idealSpendSoFar)}, tumhare ${formatINR(monthTotal)}.`;
+      healthVerdict =
+        lang === 'en'
+          ? `You're spending faster than ideal — expected ~${formatINR(idealSpendSoFar)} by today, actual ${formatINR(monthTotal)}.`
+          : `Pace tez hai — aaj tak ideal ~${formatINR(idealSpendSoFar)}, tumhara ${formatINR(monthTotal)}.`;
     } else if (usedIdealPct < 0.85) {
       paceStatus = 'slow';
-      healthVerdict = `Achha pace — budget ke hisaab se abhi comfortable ho (ideal ~${formatINR(idealSpendSoFar)}).`;
+      healthVerdict =
+        lang === 'en'
+          ? `Nice pace — you're under the ideal so far (~${formatINR(idealSpendSoFar)}).`
+          : `Achha pace — budget ke hisaab se abhi comfortable ho (ideal ~${formatINR(idealSpendSoFar)}).`;
     } else {
       paceStatus = 'on_track';
-      healthVerdict = `Spending roughly on track — budget ${formatINR(budget)}, used ${budgetUsedPct}%, left ${formatINR(remaining ?? 0)}.`;
+      healthVerdict =
+        lang === 'en'
+          ? `Spending looks on track — budget ${formatINR(budget)}, used ${budgetUsedPct}%, left ${formatINR(remaining ?? 0)}.`
+          : `Spending track pe hai — budget ${formatINR(budget)}, used ${budgetUsedPct}%, bacha ${formatINR(remaining ?? 0)}.`;
     }
   }
 
+  const periodLabel = opts.calendarDay
+    ? opts.calendarDay.label
+    : PERIOD_LABEL[opts.period];
+
   return {
     period: opts.period,
-    periodLabel: PERIOD_LABEL[opts.period],
+    periodLabel,
     count: periodList.length,
     total,
     todayTotal,
@@ -349,6 +415,12 @@ export function computeStats(
     biggest,
     categoryAmount,
     categoryId: opts.categoryId || null,
+    merchantQuery,
+    merchantAmount,
+    merchantCount,
+    dateLabel,
+    dateTotal,
+    dateCount,
     budget,
     remaining,
     budgetUsedPct,
@@ -396,6 +468,12 @@ export function fillTemplate(template: string, stats: Stats): string {
     '{biggest}': biggestStr,
     '{category}': stats.categoryId ? categoryLabel(stats.categoryId) : 'this category',
     '{categoryAmount}': formatINR(stats.categoryAmount ?? 0),
+    '{merchantQuery}': stats.merchantQuery || 'them',
+    '{merchantAmount}': formatINR(stats.merchantAmount),
+    '{merchantCount}': String(stats.merchantCount),
+    '{dateLabel}': stats.dateLabel || stats.periodLabel,
+    '{dateTotal}': formatINR(stats.dateTotal || stats.total),
+    '{dateCount}': String(stats.dateCount || stats.count),
     '{budget}': formatINR(stats.budget),
     '{remaining}': stats.remaining != null ? formatINR(stats.remaining) : '—',
     '{budgetUsedPct}': stats.budgetUsedPct != null ? `${stats.budgetUsedPct}%` : '—',

@@ -8,8 +8,29 @@ import {
   expandPatternsFromMisses,
   logLearning,
 } from '../services/assistant/maintenance';
+import { User } from '../models/User';
+import { isProActive } from '../services/proEntitlements';
 
 const router = Router();
+
+async function requireAskPro(req: AuthRequest, res: Response): Promise<boolean> {
+  const userId = req.user?.userId;
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    return false;
+  }
+  const user = await User.findById(userId)
+    .select('proPlan proStatus proExpiresAt')
+    .lean();
+  if (!user || !isProActive(user)) {
+    res.status(403).json({
+      error: 'Expenso Pro is required for Ask AI',
+      code: 'PRO_REQUIRED',
+    });
+    return false;
+  }
+  return true;
+}
 
 type BodyExpense = {
   amount?: number;
@@ -55,6 +76,8 @@ function normalizeHistory(history?: { role?: string; text?: string; intent?: str
 
 router.post('/chat', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
+    if (!(await requireAskPro(req, res))) return;
+
     const {
       message,
       expenses,
@@ -143,6 +166,8 @@ router.post('/chat', requireAuth, async (req: AuthRequest, res: Response) => {
  */
 router.post('/precise', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
+    if (!(await requireAskPro(req, res))) return;
+
     const { message, previousReply, expenses, monthlyBudget, isJoint, history, lang } = req.body as {
       message?: string;
       previousReply?: string;

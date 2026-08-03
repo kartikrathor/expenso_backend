@@ -139,13 +139,48 @@ export function llmReplyInstruction(policy: LangPolicy): string {
     return (
       `The user wrote in ${policy.label}. Understand their question, but reply in clear English only ` +
       `(we do not ship native ${policy.label} templates yet). ` +
-      `Start with one short line that ${policy.label} replies are coming soon, then give the expense answer.`
+      `Start with one short line that ${policy.label} replies are coming soon, then give the expense answer. ` +
+      `Use complete, grammatical sentences.`
     );
   }
   if (policy.replyLang === 'hi') {
-    return 'Answer in Hindi/Hinglish unless the user mixes languages.';
+    return (
+      'Reply ONLY in natural Hinglish (Roman Hindi with common English words like budget, spend, save). ' +
+      'Do NOT reply in pure English. Keep 1–3 short, clear sentences with correct grammar. ' +
+      'Never invent broken phrases like "Budget already cross" — say "Budget cross ho chuka hai" instead.'
+    );
   }
-  return 'Answer in English unless the user mixes languages.';
+  return (
+    'Reply ONLY in clear, grammatical English. Do NOT use Hinglish or Hindi words. ' +
+    'Keep 1–3 short sentences. Lead with the key number when relevant.'
+  );
+}
+
+/** Heuristic: is this reply template Hinglish/Hindi vs English? */
+const HI_TEMPLATE_MARKERS =
+  /\b(hai|hain|hoon|karo|batao|bataunga|kitna|kitne|zyada|jyada|kharch|bacha|bachaye|tumhara|tumne|maine|mera|mere|aap|namaste|abhi|pehle|kaise|kahan|sabse|wahan|jaise|hisaab|theek|sahi|poochho|poochho|add kiya|ne |ko\/pe|ho chuka|rakhna|maan ke|se cut|kaato|bachega)\b|[अ-ह]/i;
+
+export function classifyTemplateLang(template: string): ChatLang {
+  return HI_TEMPLATE_MARKERS.test(template || '') ? 'hi' : 'en';
+}
+
+/**
+ * Pick a reply template matching the user's reply language.
+ * English chip / English question → English template; Hindi/Hinglish → Hinglish.
+ */
+export function pickTemplateForLang(
+  templates: string[] | undefined,
+  lang: ChatLang,
+): string {
+  const pool = (templates || []).map(t => t.trim()).filter(Boolean);
+  if (!pool.length) {
+    return lang === 'en'
+      ? "I couldn't find a clear answer from your data yet."
+      : 'Hmm, data ke hisaab se abhi clear jawab nahi de paya.';
+  }
+  const matched = pool.filter(t => classifyTemplateLang(t) === lang);
+  const use = matched.length ? matched : pool;
+  return use[Math.floor(Math.random() * use.length)];
 }
 
 const HI_TO_EN: Record<string, string> = {

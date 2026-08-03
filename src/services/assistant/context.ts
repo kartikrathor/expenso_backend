@@ -1,6 +1,7 @@
 import { detectPeriod, Period } from './stats';
 import { PERIOD_SYNONYMS, textIncludesAny } from './lexicon';
 import { isSalaryBudgetQuestion } from './salaryBudget';
+import { isOnDateQuestion, isTransferQuestion } from './transferDate';
 
 export type HistoryTurn = {
   role: 'user' | 'assistant';
@@ -122,6 +123,8 @@ const SPEND_INTENTS = new Set([
   'partner_spend',
   'member_split',
   'by_category',
+  'by_merchant',
+  'on_date',
   'top_category',
   'top_merchant',
   'joint_summary',
@@ -155,6 +158,27 @@ export function resolveFollowUp(
       forcedIntent: 'salary_budget',
       usedContext: true,
       reason: 'salary→ideal_budget',
+    };
+  }
+
+  // Transfer / “X ko kitna bheja” — prefer by_merchant over my_spend
+  if (isTransferQuestion(msg) || isTransferQuestion(rawMessage)) {
+    return {
+      scoringMessage: rawMessage,
+      forcedIntent: 'by_merchant',
+      forcedPeriod: detectPeriod(msg),
+      usedContext: true,
+      reason: 'transfer→by_merchant',
+    };
+  }
+
+  // Specific calendar day analysis (not plain “aaj”)
+  if (isOnDateQuestion(msg) || isOnDateQuestion(rawMessage)) {
+    return {
+      scoringMessage: rawMessage,
+      forcedIntent: 'on_date',
+      usedContext: true,
+      reason: 'calendar→on_date',
     };
   }
 
