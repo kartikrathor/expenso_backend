@@ -29,6 +29,7 @@ import proRoutes from './routes/pro';
 import { ensureProCatalog } from './services/proEntitlements';
 import { hasAnyLlmKey } from './services/assistant/llm';
 import { isPushConfigured } from './services/push';
+import { privacyPolicyHtml, termsOfServiceHtml } from './legal/html';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -39,6 +40,14 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'expenso-server' });
+});
+
+app.get('/privacy', (_req, res) => {
+  res.type('html').send(privacyPolicyHtml());
+});
+
+app.get('/terms', (_req, res) => {
+  res.type('html').send(termsOfServiceHtml());
 });
 
 app.use('/api/auth', authRoutes);

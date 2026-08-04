@@ -39,7 +39,12 @@ import {
   refundTokens,
   tokenCost,
 } from './usage';
-import { buildQaLearningPrompt, learnFromLlmExchange } from './qaLearning';
+import { buildQaLearningPrompt, learnFromLlmExchange, pickLearnedRulesReply, ADVISOR_VOICE } from './qaLearning';
+import {
+  APP_GUIDE_INTENT_KEYS,
+  appGuideLlmBlock,
+  isAppGuideQuestion,
+} from './appGuide';
 
 export type ChatResult = {
   reply: string;
@@ -311,18 +316,21 @@ export async function runPreciseAnswer(input: {
     const prior = historyBrief(input.history || [], 6);
     const ledger = expensesBrief(input.expenses || [], 50);
     const qaHint = await buildQaLearningPrompt(input.message.trim());
+    const guideHint = isAppGuideQuestion(input.message) ? `\n\n${appGuideLlmBlock(lang)}` : '';
     const { text } = await completeChat([
       {
         role: 'system',
         content:
-          'You are Expenso, a careful expense analyst for India. ' +
+          ADVISOR_VOICE +
           llmReplyInstruction(policy) +
-          ' The user wants a MORE ACCURATE answer than a quick template reply. ' +
-          'Use the verified stats AND the recent expense ledger. Never invent amounts. ' +
+          ' The user tapped “Need a more accurate answer” — the previous quick reply was NOT good enough. ' +
+          'Re-read their intent carefully. Use verified stats AND the recent expense ledger. Never invent amounts. ' +
+          'If they asked how to use the app (joint, themes, budget setup, etc.), answer with clear UI steps — don’t invent spend data. ' +
           'Do NOT mention that you were given a data dump, ledger, JSON, or private payload — just answer naturally. ' +
-          'If the previous reply was incomplete or wrong, correct it briefly then give the better answer. ' +
-          'Be specific with ₹ figures from the data. Keep under 110 words. No markdown.' +
-          (qaHint ? `\n\n${qaHint}` : ''),
+          'If the previous reply was incomplete or wrong, correct it briefly then give the better advisor answer. ' +
+          'Be specific with ₹ figures when the question is about spend. Keep under 110 words. No markdown.' +
+          (qaHint ? `\n\n${qaHint}` : '') +
+          guideHint,
       },
       {
         role: 'user',
@@ -330,7 +338,7 @@ export async function runPreciseAnswer(input: {
           (prior ? `Recent chat:\n${prior}\n\n` : '') +
           `User question: ${input.message.trim()}\n` +
           (input.previousReply
-            ? `Previous quick reply (improve on this):\n${input.previousReply.slice(0, 500)}\n\n`
+            ? `Previous quick reply (user rejected this — learn from the mistake):\n${input.previousReply.slice(0, 500)}\n\n`
             : '') +
           `Verified stats (this month):\n${statsBrief(stats)}\n\n` +
           `Verified stats (all time):\n${statsBrief(statsAll)}\n\n` +
@@ -339,11 +347,13 @@ export async function runPreciseAnswer(input: {
     ]);
 
     const reply = text.slice(0, 1200);
+    // Precise = strong training signal: teach local rules Q→A + style for next time
     void learnFromLlmExchange({
       question: input.message.trim(),
       answer: reply,
       source: 'precise',
       userId: input.userId,
+      stats,
     });
 
     return withTokens(
@@ -423,19 +433,25 @@ async function llmFallbackReply(input: {
       : `Current question: ${input.userMessage}`;
 
     const qaHint = await buildQaLearningPrompt(learnQuestion);
+    const guideHint = isAppGuideQuestion(learnQuestion)
+      ? `\n\n${appGuideLlmBlock(lang)}`
+      : '';
     const { text } = await completeChat([
       {
         role: 'system',
         content:
-          'You are Expenso, a friendly expense coach for India. ' +
+          ADVISOR_VOICE +
           llmReplyInstruction(input.policy) +
           correctionNote +
           ' ONLY use the provided numbers — never invent amounts. ' +
+          'First understand intent (totals, budget left, category, merchant, tip, joint split, pace, OR app how-to). ' +
+          'If they ask how to use Expenso (joint account, themes, add expense, Pro, settings), give short UI steps from the app guide — ignore spend stats. ' +
           'Use recent chat if the user asks a follow-up (e.g. maine/partner/aur aaj). ' +
           'You can give short save tips, budget pace judgment, salary→budget rules of thumb (50/30/20), and simple calcs from the stats. ' +
           'For joint accounts use myTotal / partner / memberSplit / groupSplit when relevant. ' +
           'Keep reply under 80 words. If data is missing, say so. No markdown.' +
-          (qaHint ? `\n\n${qaHint}` : ''),
+          (qaHint ? `\n\n${qaHint}` : '') +
+          guideHint,
       },
       {
         role: 'user',
@@ -451,6 +467,7 @@ async function llmFallbackReply(input: {
       answer: reply,
       source: 'llm',
       userId: input.userId,
+      stats: input.stats,
     });
 
     return withTokens(
@@ -561,6 +578,7 @@ export async function runAssistantChat(input: {
 
   const follow = resolveFollowUp(input.message, history, input.lastIntent);
   const scoreText = follow.scoringMessage || input.message;
+  const askingAppGuide = isAppGuideQuestion(input.message);
 
   const intents = await AssistantIntent.find({ active: true }).lean();
   let bestKey = 'unknown';
@@ -569,9 +587,26 @@ export async function runAssistantChat(input: {
 
   for (const intent of intents) {
     if (follow.avoidIntent && intent.key === follow.avoidIntent) continue;
+    // Spend-summary intents shouldn't steal “joint account kya hai / themes kaise”
+    if (
+      askingAppGuide &&
+      !intent.key.startsWith('app_') &&
+      intent.key !== 'help' &&
+      intent.key !== 'greeting' &&
+      (intent.key === 'joint_summary' ||
+        intent.key === 'budget_left' ||
+        intent.key === 'saving_tips' ||
+        intent.key === 'general_tips')
+    ) {
+      continue;
+    }
     const scoreMerged = scoreIntent(scoreText, intent.patterns || []);
     const scoreRaw = scoreIntent(input.message, intent.patterns || []);
-    const score = Math.max(scoreMerged, scoreRaw);
+    let score = Math.max(scoreMerged, scoreRaw);
+    // Prefer product how-tos when the user is clearly asking about the app
+    if (askingAppGuide && intent.key.startsWith('app_')) {
+      score += 18;
+    }
     if (score > bestScore) {
       bestScore = score;
       bestKey = intent.key;
@@ -590,7 +625,9 @@ export async function runAssistantChat(input: {
   }
 
   // Rules first; AI when score weak OR user corrected previous wrong answer
-  const threshold = bestKey === 'greeting' || bestKey === 'help' ? 32 : 40;
+  const isAppGuideIntent = bestKey.startsWith('app_');
+  const threshold =
+    bestKey === 'greeting' || bestKey === 'help' || isAppGuideIntent ? 32 : 40;
   const forceLlm =
     !!follow.preferLlm &&
     (!bestDoc || bestScore < threshold || bestKey === follow.avoidIntent);
@@ -702,6 +739,21 @@ export async function runAssistantChat(input: {
 
   let intentKey = bestKey;
   let doc = bestDoc;
+
+  // App how-tos: answer from templates — no spend stats / joint gates / entity upgrades
+  if (intentKey.startsWith('app_')) {
+    const reply = pickTemplate(doc?.templates || [], lang);
+    return wt(
+      {
+        reply,
+        intent: intentKey,
+        chips: doc?.chips?.length ? doc.chips : FALLBACK_CHIPS_BY_LANG[lang],
+        matched: true,
+        source: 'rules',
+      },
+      spend,
+    );
+  }
 
   // Entity extractors can upgrade a weak/wrong match
   if (
@@ -815,18 +867,20 @@ export async function runAssistantChat(input: {
 
     return wt(
       {
-        reply: fillTemplate(
-          pickTemplate(
-            doc?.templates?.length
-              ? doc.templates
-              : [
-                  '{period}: {merchantAmount} to “{merchantQuery}” ({merchantCount} entries).',
-                  '{period} “{merchantQuery}” ko/pe {merchantAmount} ({merchantCount} entries).',
-                ],
-            lang,
+        reply:
+          (await pickLearnedRulesReply(input.message, 'by_merchant', stats, lang)) ||
+          fillTemplate(
+            pickTemplate(
+              doc?.templates?.length
+                ? doc.templates
+                : [
+                    'In {period}, transfers/payments to “{merchantQuery}” add up to {merchantAmount} across {merchantCount} entries. Biggest was {biggest}.',
+                    '{period} me “{merchantQuery}” ko/pe total {merchantAmount} gaya ({merchantCount} entries). Sabse bada: {biggest}.',
+                  ],
+              lang,
+            ),
+            stats,
           ),
-          stats,
-        ),
         intent: 'by_merchant',
         chips: doc?.chips?.length ? doc.chips : ['Is month kitna?', 'Ab tak kitna?', 'Top merchant'],
         matched: true,
@@ -865,18 +919,20 @@ export async function runAssistantChat(input: {
 
     return wt(
       {
-        reply: fillTemplate(
-          pickTemplate(
-            doc?.templates?.length
-              ? doc.templates
-              : [
-                  '{dateLabel} total: {dateTotal} ({dateCount} transactions). Biggest: {biggest}.',
-                  '{dateLabel} ko {dateTotal} kharch hua ({dateCount} entries). Top: {topMerchant}.',
-                ],
-            lang,
+        reply:
+          (await pickLearnedRulesReply(input.message, 'on_date', stats, lang)) ||
+          fillTemplate(
+            pickTemplate(
+              doc?.templates?.length
+                ? doc.templates
+                : [
+                    'On {dateLabel}, you spent {dateTotal} across {dateCount} transactions. The biggest was {biggest}.',
+                    '{dateLabel} ko aapka kharch {dateTotal} tha ({dateCount} entries). Sabse bada: {biggest}.',
+                  ],
+              lang,
+            ),
+            stats,
           ),
-          stats,
-        ),
         intent: 'on_date',
         chips: doc?.chips?.length ? doc.chips : ['Is month kitna?', 'Aaj kitna?', 'Top category'],
         matched: true,
@@ -918,6 +974,7 @@ export async function runAssistantChat(input: {
     'general_tips',
     'budget_health',
     'salary_budget',
+    ...APP_GUIDE_INTENT_KEYS,
   ];
   if (stats.count === 0 && !allowEmpty.includes(intentKey)) {
     return wt(
@@ -986,7 +1043,10 @@ export async function runAssistantChat(input: {
     );
   }
 
-  const reply = fillTemplate(pickTemplate(doc.templates || [], lang), stats);
+  // Prefer a reply shape learned from Gemini / “more accurate” when it fits this Q
+  const learned = await pickLearnedRulesReply(input.message, intentKey, stats, lang);
+  const reply =
+    learned || fillTemplate(pickTemplate(doc.templates || [], lang), stats);
 
   return wt(
     {

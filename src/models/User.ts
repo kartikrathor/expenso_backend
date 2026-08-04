@@ -9,6 +9,13 @@ export interface IThemePurchase {
   expiresAt: Date | null;
 }
 
+export interface IUserDevice {
+  deviceId: string;
+  platform: string;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+}
+
 export interface IUser extends Document {
   name: string;
   email: string;
@@ -18,11 +25,18 @@ export interface IUser extends Document {
   role: UserRole;
   /** FCM device tokens for push notifications */
   fcmTokens: string[];
+  /** Stable app install IDs seen for this account */
+  devices: IUserDevice[];
   /** When I add a joint expense, notify my partner */
   notifyPartnerOnMyJointAdd: boolean;
   /** When partner adds a joint expense, notify me */
   notifyMeOnPartnerJointAdd: boolean;
   lastActiveAt: Date;
+  /** Last successful password login */
+  lastLoginAt: Date | null;
+  lastLoginDeviceId: string;
+  /** Temp password from support — must change after login */
+  mustChangePassword: boolean;
   /** Pro subscription */
   proPlan: 'monthly' | 'yearly' | null;
   proStatus: 'none' | 'active' | 'expired' | 'cancelled';
@@ -44,6 +58,16 @@ const themePurchaseSchema = new Schema<IThemePurchase>(
   { _id: false },
 );
 
+const userDeviceSchema = new Schema<IUserDevice>(
+  {
+    deviceId: { type: String, required: true, trim: true, maxlength: 128 },
+    platform: { type: String, default: 'unknown', maxlength: 40 },
+    firstSeenAt: { type: Date, default: Date.now },
+    lastSeenAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const userSchema = new Schema<IUser>(
   {
     name: { type: String, required: true, trim: true, maxlength: 80 },
@@ -60,9 +84,13 @@ const userSchema = new Schema<IUser>(
     monthlyBudget: { type: Number, default: 0, min: 0 },
     role: { type: String, enum: ['user', 'admin'], default: 'user', index: true },
     fcmTokens: { type: [String], default: [] },
+    devices: { type: [userDeviceSchema], default: [] },
     notifyPartnerOnMyJointAdd: { type: Boolean, default: true },
     notifyMeOnPartnerJointAdd: { type: Boolean, default: true },
     lastActiveAt: { type: Date, default: Date.now, index: true },
+    lastLoginAt: { type: Date, default: null },
+    lastLoginDeviceId: { type: String, default: '' },
+    mustChangePassword: { type: Boolean, default: false },
     proPlan: {
       type: String,
       enum: ['monthly', 'yearly', null],

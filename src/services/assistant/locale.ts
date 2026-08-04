@@ -140,18 +140,25 @@ export function llmReplyInstruction(policy: LangPolicy): string {
       `The user wrote in ${policy.label}. Understand their question, but reply in clear English only ` +
       `(we do not ship native ${policy.label} templates yet). ` +
       `Start with one short line that ${policy.label} replies are coming soon, then give the expense answer. ` +
-      `Use complete, grammatical sentences.`
+      `Use complete, grammatical advisor sentences — never telegram fragments.`
     );
   }
   if (policy.replyLang === 'hi') {
     return (
-      'Reply ONLY in natural Hinglish (Roman Hindi with common English words like budget, spend, save). ' +
-      'Do NOT reply in pure English. Keep 1–3 short, clear sentences with correct grammar. ' +
-      'Never invent broken phrases like "Budget already cross" — say "Budget cross ho chuka hai" instead.'
+      'Reply ONLY in natural Hinglish (Roman Hindi + common English words like budget, spend, save). ' +
+      'Do NOT reply in pure English. Use complete sentences with correct Hinglish grammar — ' +
+      'subject + verb + object, proper tense (hai/hain/ho gaya/ho chuka). ' +
+      'Good: “Is month aapne ₹12,000 kharch kiye hain, budget se ₹3,000 bacha hai.” ' +
+      'Bad: “Month total 12000. Budget left 3000. Top food.” ' +
+      'Never invent broken phrases like “Budget already cross” — say “Budget cross ho chuka hai”. ' +
+      'Keep 1–3 short advisor sentences.'
     );
   }
   return (
     'Reply ONLY in clear, grammatical English. Do NOT use Hinglish or Hindi words. ' +
+    'Write complete advisor sentences (not bullet dumps or field lists). ' +
+    'Good: “You’ve spent ₹12,000 this month, with ₹3,000 of budget left.” ' +
+    'Bad: “Month total 12000. Budget left 3000. Top food.” ' +
     'Keep 1–3 short sentences. Lead with the key number when relevant.'
   );
 }
@@ -166,7 +173,7 @@ export function classifyTemplateLang(template: string): ChatLang {
 
 /**
  * Pick a reply template matching the user's reply language.
- * English chip / English question → English template; Hindi/Hinglish → Hinglish.
+ * Prefer longer advisor-style sentences over short data dumps.
  */
 export function pickTemplateForLang(
   templates: string[] | undefined,
@@ -180,7 +187,10 @@ export function pickTemplateForLang(
   }
   const matched = pool.filter(t => classifyTemplateLang(t) === lang);
   const use = matched.length ? matched : pool;
-  return use[Math.floor(Math.random() * use.length)];
+  // Bias toward fuller advisor sentences (learned Gemini templates tend to be longer)
+  const ranked = [...use].sort((a, b) => b.length - a.length);
+  const top = ranked.slice(0, Math.min(4, ranked.length));
+  return top[Math.floor(Math.random() * top.length)];
 }
 
 const HI_TO_EN: Record<string, string> = {
@@ -202,6 +212,13 @@ const HI_TO_EN: Record<string, string> = {
   '10 percent kaato': 'Cut 10 percent?',
   'sabse bada expense': 'Biggest expense',
   'food pe kitna?': 'How much on food?',
+  'joint account kya hai?': 'What is a joint account?',
+  'themes kaise?': 'How do themes work?',
+  'budget kaise set?': 'How to set budget?',
+  'expense kaise add?': 'How to add expense?',
+  'pro kya hai?': 'What is Pro?',
+  'settings kahan?': 'Where are settings?',
+  'export kaise?': 'How to export?',
 };
 
 const EN_TO_HI: Record<string, string> = {
@@ -222,6 +239,13 @@ const EN_TO_HI: Record<string, string> = {
   'cut 10 percent?': '10 percent kaato',
   'biggest expense': 'Sabse bada expense',
   'how much on food?': 'Food pe kitna?',
+  'what is a joint account?': 'Joint account kya hai?',
+  'how do themes work?': 'Themes kaise?',
+  'how to set budget?': 'Budget kaise set?',
+  'how to add expense?': 'Expense kaise add?',
+  'what is pro?': 'Pro kya hai?',
+  'where are settings?': 'Settings kahan?',
+  'how to export?': 'Export kaise?',
 };
 
 export function localizeChips(chips: string[], lang: ChatLang): string[] {

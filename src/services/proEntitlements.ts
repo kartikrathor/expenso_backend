@@ -16,6 +16,7 @@ const DEFAULT_THEME_PACKS: Array<{
   { packId: 'sunset', name: 'Sunset UPI', monthlyPrice: 19, permanentPrice: 37, sortOrder: 20 },
   { packId: 'royal', name: 'Royal', monthlyPrice: 19, permanentPrice: 37, sortOrder: 30 },
   { packId: 'rose', name: 'Rose', monthlyPrice: 19, permanentPrice: 37, sortOrder: 40 },
+  { packId: 'lavender', name: 'Lavender', monthlyPrice: 19, permanentPrice: 37, sortOrder: 45 },
   { packId: 'mono', name: 'Mono', monthlyPrice: 19, permanentPrice: 37, sortOrder: 50 },
   { packId: 'forest', name: 'Forest Calm', monthlyPrice: 19, permanentPrice: 37, sortOrder: 60 },
   {
@@ -27,6 +28,13 @@ const DEFAULT_THEME_PACKS: Array<{
   },
   { packId: 'paper', name: 'Paper Ledger', monthlyPrice: 19, permanentPrice: 37, sortOrder: 80 },
   { packId: 'neon', name: 'Neon Spend', monthlyPrice: 19, permanentPrice: 37, sortOrder: 90 },
+  {
+    packId: 'red_web_spider',
+    name: 'Red Web Spider',
+    monthlyPrice: 19,
+    permanentPrice: 37,
+    sortOrder: 100,
+  },
 ];
 
 export async function ensureProCatalog() {

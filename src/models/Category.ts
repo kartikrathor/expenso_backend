@@ -6,6 +6,12 @@ export interface IGlobalCategory extends Document {
   label: string;
   labelHi?: string;
   emoji: string;
+  /** Local upload or fetched SVG/PNG path (e.g. /uploads/categories/…) */
+  iconUrl: string;
+  /** Iconify id of current fetched icon (e.g. lucide:paw-print) */
+  iconSourceKey: string;
+  /** Previously shown Iconify ids so re-fetch cycles to a new option */
+  iconTriedKeys: string[];
   color: string;
   synonyms: string[];
   active: boolean;
@@ -21,6 +27,9 @@ const globalCategorySchema = new Schema<IGlobalCategory>(
     label: { type: String, required: true, trim: true, maxlength: 40 },
     labelHi: { type: String, default: '', maxlength: 40 },
     emoji: { type: String, default: '📦', maxlength: 8 },
+    iconUrl: { type: String, default: '', maxlength: 500 },
+    iconSourceKey: { type: String, default: '', maxlength: 120 },
+    iconTriedKeys: { type: [String], default: [] },
     color: { type: String, default: '#94A3B8', maxlength: 20 },
     synonyms: { type: [String], default: [] },
     active: { type: Boolean, default: true },
@@ -37,6 +46,8 @@ export interface IUserCategory extends Document {
   slug: string;
   label: string;
   emoji: string;
+  /** Optional SVG/image URL (Iconify CDN or uploaded) */
+  iconUrl: string;
   color: string;
   active: boolean;
   /** How many expenses used this (updated loosely) */
@@ -51,6 +62,7 @@ const userCategorySchema = new Schema<IUserCategory>(
     slug: { type: String, required: true, lowercase: true, trim: true },
     label: { type: String, required: true, trim: true, maxlength: 40 },
     emoji: { type: String, default: '✨', maxlength: 8 },
+    iconUrl: { type: String, default: '', maxlength: 500 },
     color: { type: String, default: '#A855F7', maxlength: 20 },
     active: { type: Boolean, default: true },
     useCount: { type: Number, default: 1, min: 0 },

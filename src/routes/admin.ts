@@ -1,4 +1,7 @@
 import { Router, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
+import multer from 'multer';
 import { Types } from 'mongoose';
 import { User } from '../models/User';
 import { PersonalExpense } from '../models/PersonalExpense';
@@ -9,10 +12,17 @@ import { AssistantQaPattern } from '../models/AssistantQaPattern';
 import { GlobalCategory, UserCategory } from '../models/Category';
 import { Feedback } from '../models/Feedback';
 import { SupportTicket } from '../models/SupportTicket';
+import { PasswordResetRequest } from '../models/PasswordResetRequest';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 import { requireAdmin } from '../middleware/admin';
 import { logLearning } from '../services/assistant/maintenance';
 import { listCategoryTermsForAdmin } from '../services/categoryLearning';
+import {
+  categoryUploadDir,
+  downloadCategoryIconFromUrl,
+  fetchRelatedCategorySvg,
+  unlinkCategoryIcon,
+} from '../services/categoryIcons';
 import { sendPushToUser, sendPushToUsers, isPushConfigured } from '../services/push';
 import { ProPlan } from '../models/ProPlan';
 import { ThemePackPricing } from '../models/ThemePackPricing';
@@ -23,6 +33,14 @@ import {
   entitlementPayload,
   getProPlanConfig,
 } from '../services/proEntitlements';
+import {
+  generateOtp,
+  generateVerificationToken,
+  hashSecret,
+  issueTempPasswordForRequest,
+  resetRequestCode,
+  serializeResetForClient,
+} from '../services/passwordReset';
 
 const router = Router();
 router.use(requireAuth, requireAdmin);
@@ -40,6 +58,54 @@ function slugify(label: string): string {
     .replace(/^_+|_+$/g, '')
     .slice(0, 40) || 'custom';
 }
+
+function publicBase(req: AuthRequest): string {
+  const env = (process.env.PUBLIC_API_URL || '').replace(/\/$/, '');
+  if (env) return env;
+  const host = req.get('host') || `localhost:${process.env.PORT || 4000}`;
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+  return `${proto}://${host}`;
+}
+
+function absoluteIconUrl(req: AuthRequest, iconUrl: string | undefined): string {
+  if (!iconUrl) return '';
+  if (/^https?:\/\//i.test(iconUrl)) return iconUrl;
+  if (iconUrl.startsWith('/')) return `${publicBase(req)}${iconUrl}`;
+  return iconUrl;
+}
+
+function serializeCategory(req: AuthRequest, c: any) {
+  const plain = typeof c.toObject === 'function' ? c.toObject() : c;
+  return {
+    ...plain,
+    iconUrl: absoluteIconUrl(req, plain.iconUrl || ''),
+  };
+}
+
+const categoryIconUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      cb(null, categoryUploadDir());
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.png';
+      const safe = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+      cb(null, safe);
+    },
+  }),
+  limits: { fileSize: 1.5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /^image\/(png|jpe?g|webp|gif|svg\+xml)$/i.test(file.mimetype) ||
+      file.mimetype === 'image/svg+xml' ||
+      /\.(svg|png|jpe?g|webp|gif)$/i.test(file.originalname || '');
+    if (!ok) {
+      cb(new Error('Only SVG / PNG / JPG / WebP / GIF uploads allowed'));
+      return;
+    }
+    cb(null, true);
+  },
+});
 
 /** Dashboard stats */
 router.get('/stats', async (_req: AuthRequest, res: Response) => {
@@ -105,7 +171,7 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
     const limit = Math.min(200, Number(req.query.limit) || 50);
     const users = await User.find()
       .select(
-        'name email role avatarColor lastActiveAt createdAt monthlyBudget proPlan proStatus proExpiresAt themePurchases',
+        'name email role avatarColor lastActiveAt lastLoginAt lastLoginDeviceId devices mustChangePassword createdAt monthlyBudget proPlan proStatus proExpiresAt themePurchases',
       )
       .sort({ lastActiveAt: -1 })
       .limit(limit);
@@ -117,6 +183,15 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
         role: u.role,
         avatarColor: u.avatarColor,
         lastActiveAt: u.lastActiveAt,
+        lastLoginAt: u.lastLoginAt,
+        lastLoginDeviceId: u.lastLoginDeviceId || '',
+        deviceCount: (u.devices || []).length,
+        devices: (u.devices || []).slice(0, 5).map(d => ({
+          deviceId: d.deviceId,
+          platform: d.platform,
+          lastSeenAt: d.lastSeenAt,
+        })),
+        mustChangePassword: !!u.mustChangePassword,
         createdAt: u.createdAt,
         monthlyBudget: u.monthlyBudget,
         pro: entitlementPayload(u),
@@ -377,10 +452,10 @@ router.post('/misses/:id/promote', async (req: AuthRequest, res: Response) => {
 });
 
 /** —— Global categories —— */
-router.get('/categories', async (_req: AuthRequest, res: Response) => {
+router.get('/categories', async (req: AuthRequest, res: Response) => {
   try {
     const categories = await GlobalCategory.find().sort({ label: 1 });
-    res.json({ categories });
+    res.json({ categories: categories.map(c => serializeCategory(req, c)) });
   } catch (err) {
     console.error('Admin categories error:', err);
     res.status(500).json({ error: 'Could not list categories' });
@@ -389,13 +464,14 @@ router.get('/categories', async (_req: AuthRequest, res: Response) => {
 
 router.post('/categories', async (req: AuthRequest, res: Response) => {
   try {
-    const { label, labelHi, emoji, color, synonyms, slug } = req.body as {
+    const { label, labelHi, emoji, color, synonyms, slug, iconUrl } = req.body as {
       label?: string;
       labelHi?: string;
       emoji?: string;
       color?: string;
       synonyms?: string[];
       slug?: string;
+      iconUrl?: string;
     };
     if (!label?.trim()) {
       res.status(400).json({ error: 'label required' });
@@ -412,12 +488,13 @@ router.post('/categories', async (req: AuthRequest, res: Response) => {
       label: label.trim(),
       labelHi: labelHi?.trim() || '',
       emoji: emoji || '📦',
+      iconUrl: typeof iconUrl === 'string' ? iconUrl.trim() : '',
       color: color || '#94A3B8',
       synonyms: (synonyms || []).map(s => s.trim()).filter(Boolean),
       active: true,
       source: 'admin',
     });
-    res.status(201).json({ category });
+    res.status(201).json({ category: serializeCategory(req, category) });
   } catch (err) {
     console.error('Admin create category error:', err);
     res.status(500).json({ error: 'Could not create category' });
@@ -431,13 +508,14 @@ router.patch('/categories/:slug', async (req: AuthRequest, res: Response) => {
       res.status(404).json({ error: 'Category not found' });
       return;
     }
-    const { label, labelHi, emoji, color, synonyms, active } = req.body as {
+    const { label, labelHi, emoji, color, synonyms, active, iconUrl } = req.body as {
       label?: string;
       labelHi?: string;
       emoji?: string;
       color?: string;
       synonyms?: string[];
       active?: boolean;
+      iconUrl?: string;
     };
     if (label !== undefined) category.label = label.trim();
     if (labelHi !== undefined) category.labelHi = labelHi.trim();
@@ -445,11 +523,135 @@ router.patch('/categories/:slug', async (req: AuthRequest, res: Response) => {
     if (color !== undefined) category.color = color;
     if (synonyms !== undefined) category.synonyms = synonyms.map(s => s.trim()).filter(Boolean);
     if (active !== undefined) category.active = active;
+    if (iconUrl !== undefined) {
+      if (!iconUrl && category.iconUrl) unlinkCategoryIcon(category.iconUrl);
+      category.iconUrl = typeof iconUrl === 'string' ? iconUrl.trim() : '';
+    }
     await category.save();
-    res.json({ category });
+    res.json({ category: serializeCategory(req, category) });
   } catch (err) {
     console.error('Admin update category error:', err);
     res.status(500).json({ error: 'Could not update category' });
+  }
+});
+
+router.post(
+  '/categories/:slug/icon',
+  (req, res, next) => {
+    categoryIconUpload.single('icon')(req, res, err => {
+      if (err) {
+        res.status(400).json({ error: err.message || 'Upload failed' });
+        return;
+      }
+      next();
+    });
+  },
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
+      if (!category) {
+        res.status(404).json({ error: 'Category not found' });
+        return;
+      }
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) {
+        res.status(400).json({ error: 'No icon file uploaded (field name: icon)' });
+        return;
+      }
+      unlinkCategoryIcon(category.iconUrl);
+      category.iconUrl = `/uploads/categories/${file.filename}`;
+      category.iconSourceKey = '';
+      await category.save();
+      res.json({ category: serializeCategory(req, category) });
+    } catch (err) {
+      console.error('Admin category icon upload error:', err);
+      res.status(500).json({ error: 'Could not upload icon' });
+    }
+  },
+);
+
+/** Fetch a related SVG from Iconify (or download a direct image URL).
+ *  Re-fetch skips already-shown icons so each click cycles to a new option.
+ */
+router.post('/categories/:slug/fetch-icon', async (req: AuthRequest, res: Response) => {
+  try {
+    const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
+    if (!category) {
+      res.status(404).json({ error: 'Category not found' });
+      return;
+    }
+    const query =
+      (typeof req.body?.query === 'string' && req.body.query.trim()) ||
+      category.label ||
+      category.slug;
+    const directUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+
+    const tried = Array.isArray(category.iconTriedKeys) ? [...category.iconTriedKeys] : [];
+    if (category.iconSourceKey && !tried.includes(category.iconSourceKey)) {
+      tried.push(category.iconSourceKey);
+    }
+
+    let downloaded = directUrl
+      ? await downloadCategoryIconFromUrl(directUrl)
+      : await fetchRelatedCategorySvg(query, { exclude: tried });
+
+    if (!downloaded && !directUrl) {
+      // fallback: try slug words
+      downloaded = await fetchRelatedCategorySvg(category.slug.replace(/_/g, ' '), {
+        exclude: tried,
+      });
+    }
+
+    if (!downloaded) {
+      res.status(502).json({
+        error: directUrl
+          ? 'Could not download that image URL'
+          : `No related SVG found for “${query}” — try a different search word`,
+      });
+      return;
+    }
+
+    const dir = categoryUploadDir();
+    fs.writeFileSync(path.join(dir, downloaded.fileName), downloaded.buffer);
+    unlinkCategoryIcon(category.iconUrl);
+    category.iconUrl = `/uploads/categories/${downloaded.fileName}`;
+
+    if (downloaded.iconKey) {
+      const nextTried = [...tried, downloaded.iconKey];
+      // Keep list bounded; if huge, trim oldest so cycle can restart fresh later
+      category.iconTriedKeys = nextTried.slice(-40);
+      category.iconSourceKey = downloaded.iconKey;
+    } else {
+      category.iconSourceKey = '';
+    }
+
+    await category.save();
+    res.json({
+      category: serializeCategory(req, category),
+      iconKey: downloaded.iconKey || null,
+    });
+  } catch (err) {
+    console.error('Admin category fetch-icon error:', err);
+    res.status(500).json({ error: 'Could not fetch icon' });
+  }
+});
+
+router.delete('/categories/:slug/icon', async (req: AuthRequest, res: Response) => {
+  try {
+    const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
+    if (!category) {
+      res.status(404).json({ error: 'Category not found' });
+      return;
+    }
+    unlinkCategoryIcon(category.iconUrl);
+    category.iconUrl = '';
+    category.iconSourceKey = '';
+    category.iconTriedKeys = [];
+    await category.save();
+    res.json({ category: serializeCategory(req, category) });
+  } catch (err) {
+    console.error('Admin category clear icon error:', err);
+    res.status(500).json({ error: 'Could not clear icon' });
   }
 });
 
@@ -463,7 +665,10 @@ router.delete('/categories/:slug', async (req: AuthRequest, res: Response) => {
         { active: false },
         { new: true },
       );
-      res.json({ category, message: 'Built-in category disabled' });
+      res.json({
+        category: category ? serializeCategory(req, category) : category,
+        message: 'Built-in category disabled',
+      });
       return;
     }
     const deleted = await GlobalCategory.findOneAndDelete({ slug });
@@ -471,6 +676,7 @@ router.delete('/categories/:slug', async (req: AuthRequest, res: Response) => {
       res.status(404).json({ error: 'Category not found' });
       return;
     }
+    unlinkCategoryIcon(deleted.iconUrl);
     res.json({ message: 'Deleted' });
   } catch (err) {
     console.error('Admin delete category error:', err);
@@ -1050,6 +1256,241 @@ router.patch('/users/:id/pro', async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error('Admin grant pro error:', err);
     res.status(500).json({ error: 'Could not update user Pro' });
+  }
+});
+
+function serializeResetAdmin(doc: InstanceType<typeof PasswordResetRequest>, user?: any) {
+  return {
+    ...serializeResetForClient(doc),
+    deviceId: doc.deviceId,
+    lastLoginAtAtRequest: doc.lastLoginAtAtRequest,
+    lastLoginDeviceIdAtRequest: doc.lastLoginDeviceIdAtRequest,
+    adminNote: doc.adminNote || '',
+    user: user
+      ? {
+          id: user.id || String(user._id),
+          name: user.name,
+          email: user.email,
+          lastLoginAt: user.lastLoginAt || null,
+          lastLoginDeviceId: user.lastLoginDeviceId || '',
+          lastActiveAt: user.lastActiveAt || null,
+          deviceCount: (user.devices || []).length,
+          mustChangePassword: !!user.mustChangePassword,
+        }
+      : null,
+    sameDeviceAsLastLogin: !!(
+      doc.deviceId &&
+      user?.lastLoginDeviceId &&
+      doc.deviceId === user.lastLoginDeviceId
+    ),
+  };
+}
+
+/** Password reset support queue */
+router.get('/password-resets', async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Math.min(100, Number(req.query.limit) || 50);
+    const status = String(req.query.status || '').trim();
+    const filter: Record<string, unknown> = {};
+    if (status === 'open') {
+      filter.status = {
+        $in: ['pending', 'awaiting_verification', 'verified', 'temp_password_sent'],
+      };
+    } else if (status) {
+      filter.status = status;
+    }
+
+    const rows = await PasswordResetRequest.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('user', 'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword');
+
+    const pendingCount = await PasswordResetRequest.countDocuments({
+      status: { $in: ['pending', 'awaiting_verification', 'verified'] },
+    });
+
+    res.json({
+      pendingCount,
+      requests: rows.map(r => serializeResetAdmin(r, r.user)),
+    });
+  } catch (err) {
+    console.error('Admin password-resets list error:', err);
+    res.status(500).json({ error: 'Could not list password resets' });
+  }
+});
+
+router.get('/password-resets/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = paramStr(req.params.id);
+    if (!Types.ObjectId.isValid(id)) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const doc = await PasswordResetRequest.findById(id).populate(
+      'user',
+      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
+    );
+    if (!doc) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    res.json({ request: serializeResetAdmin(doc, doc.user) });
+  } catch (err) {
+    console.error('Admin password-reset get error:', err);
+    res.status(500).json({ error: 'Could not load request' });
+  }
+});
+
+router.patch('/password-resets/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = paramStr(req.params.id);
+    const body = req.body as {
+      adminNote?: string;
+      status?: 'rejected' | 'completed';
+      reply?: string;
+    };
+    const doc = await PasswordResetRequest.findById(id).populate(
+      'user',
+      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
+    );
+    if (!doc) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    if (typeof body.adminNote === 'string') {
+      doc.adminNote = body.adminNote.trim().slice(0, 2000);
+    }
+    if (body.status === 'rejected' || body.status === 'completed') {
+      doc.status = body.status;
+      if (body.status === 'completed') doc.completedAt = new Date();
+    }
+    const reply = String(body.reply || '').trim();
+    if (reply) {
+      doc.messages.push({ role: 'admin', message: reply.slice(0, 4000), createdAt: new Date() });
+    }
+    await doc.save();
+    res.json({ request: serializeResetAdmin(doc, doc.user) });
+  } catch (err) {
+    console.error('Admin password-reset patch error:', err);
+    res.status(500).json({ error: 'Could not update request' });
+  }
+});
+
+/** Same-device (or already verified): generate temp password + deliver as message */
+router.post('/password-resets/:id/send-temp-password', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = paramStr(req.params.id);
+    const doc = await PasswordResetRequest.findById(id).populate(
+      'user',
+      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
+    );
+    if (!doc) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    if (['rejected', 'completed'].includes(doc.status)) {
+      res.status(400).json({ error: 'Request is closed' });
+      return;
+    }
+    if (!doc.sameDevice && doc.status !== 'verified' && doc.status !== 'temp_password_sent') {
+      res.status(400).json({
+        error:
+          'New device — send OTP/verification link first. Temp password only after verify (or same device).',
+      });
+      return;
+    }
+
+    const temp = await issueTempPasswordForRequest(doc);
+    const fresh = await PasswordResetRequest.findById(id).populate(
+      'user',
+      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
+    );
+
+    res.json({
+      request: serializeResetAdmin(fresh!, fresh!.user),
+      tempPassword: temp,
+      message: 'Temporary password generated and added to the user message thread.',
+    });
+  } catch (err) {
+    console.error('Admin send-temp-password error:', err);
+    res.status(500).json({ error: 'Could not send temporary password' });
+  }
+});
+
+/** New-device: create OTP + optional verification token for admin to share */
+router.post('/password-resets/:id/send-verification', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = paramStr(req.params.id);
+    const mode = String((req.body as { mode?: string })?.mode || 'both');
+    const doc = await PasswordResetRequest.findById(id).populate(
+      'user',
+      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
+    );
+    if (!doc) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    if (['rejected', 'completed', 'temp_password_sent'].includes(doc.status)) {
+      res.status(400).json({ error: 'Request is closed or already has a temp password' });
+      return;
+    }
+
+    const expires = new Date(Date.now() + 30 * 60 * 1000);
+    let otp: string | undefined;
+    let verificationToken: string | undefined;
+
+    if (mode === 'otp' || mode === 'both') {
+      otp = generateOtp();
+      doc.otpHash = await hashSecret(otp);
+      doc.otpExpiresAt = expires;
+    }
+    if (mode === 'link' || mode === 'both') {
+      verificationToken = generateVerificationToken();
+      doc.verificationTokenHash = await hashSecret(verificationToken);
+      doc.verificationExpiresAt = expires;
+    }
+
+    doc.status = 'awaiting_verification';
+    const code = resetRequestCode(doc.id);
+    const parts = [
+      `Verification for ${code} (expires in 30 min).`,
+      otp ? `OTP: ${otp}` : null,
+      verificationToken ? `Link token: ${verificationToken}` : null,
+      'User enters this in the app under Forgot password → Verify.',
+    ].filter(Boolean);
+    doc.messages.push({
+      role: 'admin',
+      message: parts.join('\n'),
+      createdAt: new Date(),
+    });
+    await doc.save();
+
+    try {
+      const uid =
+        doc.user && typeof doc.user === 'object' && '_id' in (doc.user as object)
+          ? String((doc.user as { _id: unknown })._id)
+          : String(doc.user);
+      await sendPushToUser(uid, {
+        title: 'Password reset verification',
+        body: otp
+          ? `Your Expenso verification OTP is ${otp}`
+          : 'Open Expenso → Forgot password to enter your verification token.',
+        data: { type: 'password_reset', requestId: String(doc._id) },
+      });
+    } catch {
+      /* ignore */
+    }
+
+    res.json({
+      request: serializeResetAdmin(doc, doc.user),
+      otp: otp || null,
+      verificationToken: verificationToken || null,
+      expiresAt: expires,
+      message: 'Verification created. Share OTP/token with the user (also pushed if they have FCM).',
+    });
+  } catch (err) {
+    console.error('Admin send-verification error:', err);
+    res.status(500).json({ error: 'Could not create verification' });
   }
 });
 
