@@ -17,7 +17,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
     const userId = req.user!.userId;
     const expenses = await PersonalExpense.find({ user: userId })
       .sort({ date: -1 })
-      .limit(500);
+      .limit(2000);
     res.json({ expenses });
   } catch (err) {
     console.error('List personal expenses error:', err);

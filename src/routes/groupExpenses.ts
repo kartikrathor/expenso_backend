@@ -34,7 +34,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
       .populate('paidBy', 'name email avatarColor')
       .populate('createdBy', 'name')
       .sort({ date: -1 })
-      .limit(200);
+      .limit(1000);
 
     res.json({ expenses });
   } catch (err) {
