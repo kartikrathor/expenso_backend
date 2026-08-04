@@ -12,6 +12,7 @@ export type CategoryId =
 
 export interface IPersonalExpense extends Document {
   user: Types.ObjectId;
+  clientId?: string;
   amount: number;
   merchantLabel: string;
   merchant: string;
@@ -26,6 +27,7 @@ export interface IPersonalExpense extends Document {
 const personalExpenseSchema = new Schema<IPersonalExpense>(
   {
     user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    clientId: { type: String, trim: true, maxlength: 120 },
     amount: { type: Number, required: true, min: 0.01 },
     merchantLabel: { type: String, required: true, trim: true, maxlength: 80 },
     merchant: { type: String, default: 'default', maxlength: 40 },
@@ -38,6 +40,13 @@ const personalExpenseSchema = new Schema<IPersonalExpense>(
 );
 
 personalExpenseSchema.index({ user: 1, date: -1 });
+personalExpenseSchema.index(
+  { user: 1, clientId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientId: { $type: 'string' } },
+  },
+);
 
 export const PersonalExpense = mongoose.model<IPersonalExpense>(
   'PersonalExpense',

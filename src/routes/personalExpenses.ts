@@ -11,6 +11,31 @@ function normalizeCategory(category?: string): string {
   return c || 'other';
 }
 
+function normalizeClientId(clientId?: string): string | undefined {
+  const value = clientId?.trim().slice(0, 120);
+  return value || undefined;
+}
+
+function exactDuplicateKey(expense: {
+  amount: number;
+  merchantLabel: string;
+  merchant: string;
+  category: string;
+  note: string;
+  date: Date;
+  inputMethod: string;
+}): string {
+  return JSON.stringify([
+    Number(expense.amount),
+    expense.merchantLabel.trim().toLowerCase(),
+    expense.merchant.trim().toLowerCase(),
+    expense.category.trim().toLowerCase(),
+    expense.note.trim(),
+    expense.date.toISOString(),
+    expense.inputMethod,
+  ]);
+}
+
 /** List personal expenses for the signed-in user */
 router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -63,11 +88,35 @@ router.patch('/budget', requireAuth, async (req: AuthRequest, res: Response) => 
   }
 });
 
+/** Remove historical exact copies created by request retries or old cache migration. */
+router.post('/dedupe', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const expenses = await PersonalExpense.find({ user: userId }).sort({ createdAt: 1 });
+    const seen = new Set<string>();
+    const duplicateIds = [];
+
+    for (const expense of expenses) {
+      const key = exactDuplicateKey(expense);
+      if (seen.has(key)) duplicateIds.push(expense._id);
+      else seen.add(key);
+    }
+
+    if (duplicateIds.length > 0) {
+      await PersonalExpense.deleteMany({ user: userId, _id: { $in: duplicateIds } });
+    }
+    res.json({ removed: duplicateIds.length });
+  } catch (err) {
+    console.error('Dedupe personal expenses error:', err);
+    res.status(500).json({ error: 'Could not clean duplicate expenses' });
+  }
+});
+
 /** Create personal expense */
 router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { amount, merchantLabel, merchant, category, note, date, inputMethod } = req.body as {
+    const { amount, merchantLabel, merchant, category, note, date, inputMethod, clientId } = req.body as {
       amount?: number;
       merchantLabel?: string;
       merchant?: string;
@@ -75,6 +124,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       note?: string;
       date?: string;
       inputMethod?: 'voice' | 'manual';
+      clientId?: string;
     };
 
     if (!amount || amount <= 0 || !merchantLabel?.trim()) {
@@ -82,8 +132,8 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const expense = await PersonalExpense.create({
-      user: userId,
+    const createData = {
+      ...(normalizeClientId(clientId) ? { clientId: normalizeClientId(clientId) } : {}),
       amount,
       merchantLabel: merchantLabel.trim(),
       merchant: merchant?.trim() || 'default',
@@ -91,7 +141,15 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       note: note?.trim() || '',
       date: date ? new Date(date) : new Date(),
       inputMethod: inputMethod === 'voice' ? 'voice' : 'manual',
-    });
+    };
+    const stableClientId = normalizeClientId(clientId);
+    const expense = stableClientId
+      ? await PersonalExpense.findOneAndUpdate(
+          { user: userId, clientId: stableClientId },
+          { $setOnInsert: { user: userId, ...createData } },
+          { upsert: true, new: true, setDefaultsOnInsert: true },
+        )
+      : await PersonalExpense.create({ user: userId, ...createData });
 
     res.status(201).json({ expense });
   } catch (err) {
@@ -166,11 +224,9 @@ router.delete('/:expenseId', requireAuth, async (req: AuthRequest, res: Response
       _id: req.params.expenseId,
       user: userId,
     });
-    if (!deleted) {
-      res.status(404).json({ error: 'Expense not found' });
-      return;
-    }
-    res.json({ message: 'Deleted' });
+    // DELETE is intentionally idempotent: a retry after a lost response must
+    // still succeed instead of leaving the client stuck with a stale row.
+    res.json({ message: 'Deleted', alreadyDeleted: !deleted });
   } catch (err) {
     console.error('Delete personal expense error:', err);
     res.status(500).json({ error: 'Could not delete expense' });

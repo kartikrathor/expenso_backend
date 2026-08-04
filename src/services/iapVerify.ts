@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { google } from 'googleapis';
 import {
   addMonths,
@@ -58,11 +60,25 @@ export async function planForProductId(productId: string): Promise<IapPlan | nul
 
 function parseServiceAccount() {
   const raw = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON;
-  if (!raw?.trim()) return null;
+  if (raw?.trim()) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      console.warn('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not valid JSON');
+      return null;
+    }
+  }
+
+  const configuredPath = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_FILE;
+  const credentialsPath = configuredPath
+    ? path.resolve(configuredPath)
+    : path.join(process.cwd(), 'secerets', 'google-play-service-account.json');
+
+  if (!fs.existsSync(credentialsPath)) return null;
   try {
-    return JSON.parse(raw);
+    return JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
   } catch {
-    console.warn('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not valid JSON');
+    console.warn('Google Play service-account file is missing or invalid');
     return null;
   }
 }
@@ -87,7 +103,7 @@ async function verifyAndroidPurchase(input: VerifyIapInput): Promise<VerifyIapRe
     if (!skipVerify) {
       throw Object.assign(
         new Error(
-          'Google Play verification is not configured. Set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON.',
+          'Google Play verification is not configured. Set GOOGLE_PLAY_SERVICE_ACCOUNT_FILE or GOOGLE_PLAY_SERVICE_ACCOUNT_JSON.',
         ),
         { status: 503 },
       );

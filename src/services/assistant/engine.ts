@@ -348,7 +348,7 @@ export async function runPreciseAnswer(input: {
 
     const reply = text.slice(0, 1200);
     // Precise = strong training signal: teach local rules Q→A + style for next time
-    void learnFromLlmExchange({
+    await learnFromLlmExchange({
       question: input.message.trim(),
       answer: reply,
       source: 'precise',
@@ -394,6 +394,7 @@ async function llmFallbackReply(input: {
   inputMode: 'keyboard' | 'chip';
   history?: HistoryTurn[];
   policy: LangPolicy;
+  intentKey?: string;
   /** User rejected previous rules answer — re-answer carefully */
   correction?: boolean;
   priorQuestion?: string;
@@ -462,12 +463,13 @@ async function llmFallbackReply(input: {
     ]);
 
     const reply = text.slice(0, 800);
-    void learnFromLlmExchange({
+    await learnFromLlmExchange({
       question: learnQuestion,
       answer: reply,
       source: 'llm',
       userId: input.userId,
       stats: input.stats,
+      intentKey: input.intentKey,
     });
 
     return withTokens(
@@ -651,6 +653,38 @@ export async function runAssistantChat(input: {
   const priorUserQ = [...history].reverse().find(h => h.role === 'user')?.text;
 
   if (forceLlm || !bestDoc || bestScore < threshold) {
+    // Reuse only fillable templates with current stats. Context-dependent
+    // follow-ups and corrections still go to the LLM to avoid a stale/wrong reply.
+    if (!forceLlm && !follow.usedContext) {
+      const learned = await pickLearnedRulesReply(input.message, bestKey, baseStats, lang);
+      if (learned) {
+        const spend = await spendRules(input.userId, inputMode);
+        if (!spend.ok) {
+          const gate = tokenGateReply(lang, spend.limit);
+          return wt(
+            {
+              reply: gate.reply,
+              intent: gate.intent,
+              chips: FALLBACK_CHIPS_BY_LANG[lang],
+              matched: false,
+              source: 'fallback',
+            },
+            spend,
+          );
+        }
+        return wt(
+          {
+            reply: learned,
+            intent: bestDoc ? bestKey : 'learned_answer',
+            chips: FALLBACK_CHIPS_BY_LANG[lang],
+            matched: true,
+            source: 'rules',
+          },
+          spend,
+        );
+      }
+    }
+
     await AssistantMiss.create({
       userId: input.userId,
       message: input.message.slice(0, 500),
@@ -665,6 +699,7 @@ export async function runAssistantChat(input: {
       policy,
       correction: !!follow.preferLlm,
       priorQuestion: follow.preferLlm ? priorUserQ : undefined,
+      intentKey: bestDoc && bestScore >= 25 ? bestKey : undefined,
     });
     if (llm) return llm;
 

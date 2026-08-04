@@ -12,6 +12,7 @@ export type CategoryId =
 
 export interface IGroupExpense extends Document {
   group: Types.ObjectId;
+  clientId?: string;
   amount: number;
   merchantLabel: string;
   category: CategoryId;
@@ -28,6 +29,7 @@ export interface IGroupExpense extends Document {
 const groupExpenseSchema = new Schema<IGroupExpense>(
   {
     group: { type: Schema.Types.ObjectId, ref: 'Group', required: true, index: true },
+    clientId: { type: String, trim: true, maxlength: 120 },
     amount: { type: Number, required: true, min: 0.01 },
     merchantLabel: { type: String, required: true, trim: true, maxlength: 80 },
     category: { type: String, default: 'other', maxlength: 40 },
@@ -41,5 +43,12 @@ const groupExpenseSchema = new Schema<IGroupExpense>(
 );
 
 groupExpenseSchema.index({ group: 1, date: -1 });
+groupExpenseSchema.index(
+  { group: 1, clientId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientId: { $type: 'string' } },
+  },
+);
 
 export const GroupExpense = mongoose.model<IGroupExpense>('GroupExpense', groupExpenseSchema);

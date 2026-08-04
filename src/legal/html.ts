@@ -1,5 +1,5 @@
 const CONTACT_EMAIL =
-  (process.env.LEGAL_CONTACT_EMAIL || process.env.ADMIN_EMAIL || 'kartikrathor.work@gmail.com').trim();
+  (process.env.LEGAL_CONTACT_EMAIL || process.env.ADMIN_EMAIL || 'kriovent.support@gmail.com').trim();
 
 const APP_NAME = 'Expenso';
 const PACKAGE_ID = 'com.kriovent.expenso';

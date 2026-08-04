@@ -20,6 +20,33 @@ function formatInr(n: number): string {
   return `₹${Number(n || 0).toLocaleString('en-IN')}`;
 }
 
+function normalizeClientId(clientId?: string): string | undefined {
+  const value = clientId?.trim().slice(0, 120);
+  return value || undefined;
+}
+
+function exactDuplicateKey(expense: {
+  amount: number;
+  merchantLabel: string;
+  category: string;
+  note: string;
+  date: Date;
+  paidBy: unknown;
+  splitAmong: unknown[];
+  createdBy: unknown;
+}): string {
+  return JSON.stringify([
+    Number(expense.amount),
+    expense.merchantLabel.trim().toLowerCase(),
+    expense.category.trim().toLowerCase(),
+    expense.note.trim(),
+    expense.date.toISOString(),
+    String(expense.paidBy),
+    expense.splitAmong.map(String).sort(),
+    String(expense.createdBy),
+  ]);
+}
+
 /** List shared expenses in a group */
 router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -43,6 +70,35 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
+/** Remove historical exact copies created by outbox request retries. */
+router.post('/dedupe', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const groupId = req.params.groupId as string;
+    const check = await assertMember(groupId, req.user!.userId);
+    if ('error' in check && check.error) {
+      res.status(check.status!).json({ error: check.error });
+      return;
+    }
+
+    const expenses = await GroupExpense.find({ group: groupId }).sort({ createdAt: 1 });
+    const seen = new Set<string>();
+    const duplicateIds = [];
+    for (const expense of expenses) {
+      const key = exactDuplicateKey(expense);
+      if (seen.has(key)) duplicateIds.push(expense._id);
+      else seen.add(key);
+    }
+
+    if (duplicateIds.length > 0) {
+      await GroupExpense.deleteMany({ group: groupId, _id: { $in: duplicateIds } });
+    }
+    res.json({ removed: duplicateIds.length });
+  } catch (err) {
+    console.error('Dedupe group expenses error:', err);
+    res.status(500).json({ error: 'Could not clean duplicate expenses' });
+  }
+});
+
 /** Add shared expense */
 router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -54,7 +110,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const { amount, merchantLabel, category, note, date, paidBy, splitAmong } = req.body as {
+    const { amount, merchantLabel, category, note, date, paidBy, splitAmong, clientId } = req.body as {
       amount?: number;
       merchantLabel?: string;
       category?: string;
@@ -62,6 +118,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       date?: string;
       paidBy?: string;
       splitAmong?: string[];
+      clientId?: string;
     };
 
     if (!amount || amount <= 0 || !merchantLabel?.trim()) {
@@ -69,8 +126,9 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const expense = await GroupExpense.create({
-      group: groupId,
+    const stableClientId = normalizeClientId(clientId);
+    const createData = {
+      ...(stableClientId ? { clientId: stableClientId } : {}),
       amount,
       merchantLabel: merchantLabel.trim(),
       category: category || 'other',
@@ -79,7 +137,14 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       paidBy: paidBy || userId,
       splitAmong: splitAmong || [],
       createdBy: userId,
-    });
+    };
+    const expense = stableClientId
+      ? await GroupExpense.findOneAndUpdate(
+          { group: groupId, clientId: stableClientId },
+          { $setOnInsert: { group: groupId, ...createData } },
+          { upsert: true, new: true, setDefaultsOnInsert: true },
+        )
+      : await GroupExpense.create({ group: groupId, ...createData });
 
     const populated = await GroupExpense.findById(expense.id)
       .populate('paidBy', 'name email avatarColor')
@@ -190,6 +255,27 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
   }
 });
 
+/** Cancel an optimistic/outbox create even if its POST response was lost. */
+router.delete('/by-client/:clientId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const groupId = req.params.groupId as string;
+    const check = await assertMember(groupId, req.user!.userId);
+    if ('error' in check && check.error) {
+      res.status(check.status!).json({ error: check.error });
+      return;
+    }
+
+    const result = await GroupExpense.deleteMany({
+      group: groupId,
+      clientId: req.params.clientId,
+    });
+    res.json({ ok: true, deletedCount: result.deletedCount });
+  } catch (err) {
+    console.error('Cancel group expense create error:', err);
+    res.status(500).json({ error: 'Could not cancel expense' });
+  }
+});
+
 /** Delete shared expense (any member) */
 router.delete('/:expenseId', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -201,14 +287,12 @@ router.delete('/:expenseId', requireAuth, async (req: AuthRequest, res: Response
       return;
     }
 
-    const expense = await GroupExpense.findOne({ _id: req.params.expenseId, group: groupId });
-    if (!expense) {
-      res.status(404).json({ error: 'Expense not found' });
-      return;
-    }
-
-    await expense.deleteOne();
-    res.json({ ok: true });
+    const expense = await GroupExpense.findOneAndDelete({
+      _id: req.params.expenseId,
+      group: groupId,
+    });
+    // Idempotent for outbox retries after a successful delete response is lost.
+    res.json({ ok: true, alreadyDeleted: !expense });
   } catch (err) {
     console.error('Delete group expense error:', err);
     res.status(500).json({ error: 'Could not delete expense' });

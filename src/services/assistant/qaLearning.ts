@@ -491,6 +491,17 @@ export async function pickLearnedRulesReply(
     const keywords = extractQaKeywords(question);
     if (keywords.length < 1 && !intentKey) return null;
 
+    // Exact repeats use the unique fingerprint index first. This stays fast as
+    // learning data grows and avoids a popular broad match hiding the exact Q&A.
+    const fingerprint = qaFingerprint(keywords);
+    const exact = fingerprint
+      ? await AssistantQaPattern.findOne({
+          fingerprint,
+          active: true,
+          replyTemplate: { $exists: true, $nin: [null, ''] },
+        }).lean()
+      : null;
+
     const filter: Record<string, unknown> = {
       active: true,
       replyTemplate: { $exists: true, $nin: [null, ''] },
@@ -501,10 +512,12 @@ export async function pickLearnedRulesReply(
       filter.intentKey = intentKey;
     }
 
-    const candidates = await AssistantQaPattern.find(filter)
-      .sort({ weight: -1, hits: -1 })
-      .limit(30)
-      .lean();
+    const candidates = exact
+      ? [exact]
+      : await AssistantQaPattern.find(filter)
+          .sort({ weight: -1, hits: -1 })
+          .limit(30)
+          .lean();
 
     if (!candidates.length) return null;
 
