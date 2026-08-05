@@ -51,4 +51,6 @@ const categoryTermSchema = new Schema<ICategoryTerm>(
   { timestamps: true },
 );
 
+categoryTermSchema.index({ 'votes.userIds': 1, active: 1 });
+
 export const CategoryTerm = mongoose.model<ICategoryTerm>('CategoryTerm', categoryTermSchema);

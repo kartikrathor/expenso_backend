@@ -42,7 +42,8 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
     const userId = req.user!.userId;
     const expenses = await PersonalExpense.find({ user: userId })
       .sort({ date: -1 })
-      .limit(2000);
+      .limit(2000)
+      .lean();
     res.json({ expenses });
   } catch (err) {
     console.error('List personal expenses error:', err);
@@ -53,7 +54,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
 /** Personal monthly budget (stored on User) */
 router.get('/budget', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const user = await User.findById(req.user!.userId).select('monthlyBudget');
+    const user = await User.findById(req.user!.userId).select('monthlyBudget').lean();
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
@@ -180,6 +181,7 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
       date?: string;
       inputMethod?: 'voice' | 'manual';
     };
+    let categoryCorrection: { fromCategory: string; toCategory: string } | null = null;
 
     if (amount !== undefined) {
       if (amount <= 0) {
@@ -195,13 +197,7 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
       const nextCat = normalizeCategory(category);
       expense.category = nextCat as typeof expense.category;
       if (prevCat !== nextCat) {
-        void recordCategoryCorrection({
-          userId,
-          fromCategory: prevCat,
-          toCategory: nextCat,
-          merchantLabel: expense.merchantLabel,
-          note: expense.note,
-        }).catch(() => {});
+        categoryCorrection = { fromCategory: prevCat, toCategory: nextCat };
       }
     }
     if (note !== undefined) expense.note = note.trim();
@@ -209,6 +205,14 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
     if (inputMethod === 'voice' || inputMethod === 'manual') expense.inputMethod = inputMethod;
 
     await expense.save();
+    if (categoryCorrection) {
+      await recordCategoryCorrection({
+        userId,
+        ...categoryCorrection,
+        merchantLabel: expense.merchantLabel,
+        note: expense.note,
+      }).catch(err => console.warn('Personal category learning failed:', err));
+    }
     res.json({ expense });
   } catch (err) {
     console.error('Update personal expense error:', err);

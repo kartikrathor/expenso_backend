@@ -1,4 +1,5 @@
 import { CategoryTerm, ICategoryTerm } from '../models/CategoryTerm';
+import { UserCategory } from '../models/Category';
 import { completeChat, hasAnyLlmKey } from './assistant/llm';
 
 const VALID = new Set([
@@ -304,8 +305,19 @@ export async function recordCategoryCorrection(input: {
   note?: string;
 }): Promise<{ learned: string[]; skipped?: string }> {
   const to = (input.toCategory || '').trim().toLowerCase();
-  if (!VALID.has(to) || to === 'other') {
+  if (to === 'other') {
     return { learned: [], skipped: 'target category not learnable' };
+  }
+  const isGlobalTarget = VALID.has(to);
+  if (!isGlobalTarget) {
+    const isOwnedCustomCategory = await UserCategory.exists({
+      user: input.userId,
+      slug: to,
+      active: true,
+    });
+    if (!isOwnedCustomCategory) {
+      return { learned: [], skipped: 'target category not learnable' };
+    }
   }
   const from = (input.fromCategory || '').trim().toLowerCase();
   if (from && from === to) return { learned: [], skipped: 'no change' };
@@ -353,13 +365,16 @@ export async function recordCategoryCorrection(input: {
       doc.markModified('votes');
     }
 
-    const win = winningVote(doc.votes);
+    // Custom categories are personal. Keep them available to the correcting
+    // user, but never let them become a global mapping for other accounts.
+    const globalVotes = doc.votes.filter(v => VALID.has(v.category));
+    const win = winningVote(globalVotes);
     if (win) {
       doc.category = win.category;
       doc.weight = doc.source === 'seed' ? Math.max(doc.weight, 100 + win.count) : win.count;
     }
 
-    if (hasConflict(doc.votes)) {
+    if (hasConflict(globalVotes)) {
       doc.conflict = true;
       // Keep active with current winner until LLM resolves
     } else if (win && win.count >= PROMOTE_VOTES) {
@@ -377,14 +392,23 @@ export async function recordCategoryCorrection(input: {
   return { learned };
 }
 
-/** Active term → category map for app parser / assistant. */
-export async function getActiveCategoryTermMap(): Promise<Record<string, string>> {
-  const rows = await CategoryTerm.find({ active: true }).select('term category weight').lean();
+/** Global active terms + this user's own corrections for the app parser. */
+export async function getActiveCategoryTermMap(userId?: string): Promise<Record<string, string>> {
+  const filter = userId
+    ? { $or: [{ active: true }, { 'votes.userIds': userId }] }
+    : { active: true };
+  const rows = await CategoryTerm.find(filter)
+    .select('term category weight active votes')
+    .lean();
   // Longer terms first when matching — client can sort; we return plain map
   const map: Record<string, string> = {};
   const sorted = [...rows].sort((a, b) => b.term.length - a.term.length || b.weight - a.weight);
   for (const r of sorted) {
-    if (!map[r.term]) map[r.term] = r.category;
+    const ownVote = userId
+      ? r.votes?.find(v => v.userIds?.includes(userId))
+      : undefined;
+    const category = ownVote?.category || (r.active ? r.category : undefined);
+    if (category && !map[r.term]) map[r.term] = category;
   }
   return map;
 }

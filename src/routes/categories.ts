@@ -245,8 +245,9 @@ router.delete('/custom/:slug', requireAuth, async (req: AuthRequest, res: Respon
 /** Learned + seeded keyword → category map for the app parser */
 router.get('/terms', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    touchUserActive(req.user!.userId);
-    const terms = await getActiveCategoryTermMap();
+    const userId = req.user!.userId;
+    touchUserActive(userId);
+    const terms = await getActiveCategoryTermMap(userId);
     res.json({ terms });
   } catch (err) {
     console.error('Category terms error:', err);

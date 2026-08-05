@@ -61,7 +61,8 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
       .populate('paidBy', 'name email avatarColor')
       .populate('createdBy', 'name')
       .sort({ date: -1 })
-      .limit(1000);
+      .limit(1000)
+      .lean();
 
     res.json({ expenses });
   } catch (err) {
@@ -216,6 +217,7 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
       note?: string;
       date?: string;
     };
+    let categoryCorrection: { fromCategory: string; toCategory: string } | null = null;
 
     if (amount !== undefined) {
       if (amount <= 0) {
@@ -230,19 +232,21 @@ router.patch('/:expenseId', requireAuth, async (req: AuthRequest, res: Response)
       const nextCat = String(category || 'other').trim().toLowerCase().slice(0, 40) || 'other';
       expense.category = nextCat as any;
       if (prevCat !== nextCat) {
-        void recordCategoryCorrection({
-          userId,
-          fromCategory: prevCat,
-          toCategory: nextCat,
-          merchantLabel: expense.merchantLabel,
-          note: expense.note,
-        }).catch(() => {});
+        categoryCorrection = { fromCategory: prevCat, toCategory: nextCat };
       }
     }
     if (note !== undefined) expense.note = note.trim();
     if (date !== undefined) expense.date = new Date(date);
 
     await expense.save();
+    if (categoryCorrection) {
+      await recordCategoryCorrection({
+        userId,
+        ...categoryCorrection,
+        merchantLabel: expense.merchantLabel,
+        note: expense.note,
+      }).catch(err => console.warn('Joint category learning failed:', err));
+    }
 
     const populated = await GroupExpense.findById(expense.id)
       .populate('paidBy', 'name email avatarColor')
