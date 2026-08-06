@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
+import { MONTH_KEY_PATTERN, MonthlyBudgetEntry } from '../services/monthlyBudgets';
 
 export type UserRole = 'user' | 'admin';
 
@@ -22,6 +23,8 @@ export interface IUser extends Document {
   passwordHash: string;
   avatarColor: string;
   monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
   role: UserRole;
   /** FCM device tokens for push notifications */
   fcmTokens: string[];
@@ -68,6 +71,19 @@ const userDeviceSchema = new Schema<IUserDevice>(
   { _id: false },
 );
 
+const monthlyBudgetSchema = new Schema<MonthlyBudgetEntry>(
+  {
+    month: { type: String, required: true, match: MONTH_KEY_PATTERN },
+    amount: {
+      type: Number,
+      required: true,
+      min: 0,
+      validate: Number.isFinite,
+    },
+  },
+  { _id: false },
+);
+
 const userSchema = new Schema<IUser>(
   {
     name: { type: String, required: true, trim: true, maxlength: 80 },
@@ -81,7 +97,9 @@ const userSchema = new Schema<IUser>(
     },
     passwordHash: { type: String, required: true },
     avatarColor: { type: String, default: '#6366F1' },
-    monthlyBudget: { type: Number, default: 0, min: 0 },
+    monthlyBudget: { type: Number, default: 0, min: 0, validate: Number.isFinite },
+    monthlyBudgets: { type: [monthlyBudgetSchema], default: [] },
+    repeatMonthlyBudget: { type: Boolean, default: false },
     role: { type: String, enum: ['user', 'admin'], default: 'user', index: true },
     fcmTokens: { type: [String], default: [] },
     devices: { type: [userDeviceSchema], default: [] },

@@ -171,7 +171,7 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
     const limit = Math.min(200, Number(req.query.limit) || 50);
     const users = await User.find()
       .select(
-        'name email role avatarColor lastActiveAt lastLoginAt lastLoginDeviceId devices mustChangePassword createdAt monthlyBudget proPlan proStatus proExpiresAt themePurchases',
+        'name email role avatarColor lastActiveAt lastLoginAt lastLoginDeviceId devices mustChangePassword createdAt monthlyBudget repeatMonthlyBudget proPlan proStatus proExpiresAt themePurchases',
       )
       .sort({ lastActiveAt: -1 })
       .limit(limit);
@@ -194,6 +194,7 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
         mustChangePassword: !!u.mustChangePassword,
         createdAt: u.createdAt,
         monthlyBudget: u.monthlyBudget,
+        repeatMonthlyBudget: u.repeatMonthlyBudget ?? false,
         pro: entitlementPayload(u),
       })),
     });

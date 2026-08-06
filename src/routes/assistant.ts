@@ -10,6 +10,7 @@ import {
 } from '../services/assistant/maintenance';
 import { User } from '../models/User';
 import { isProActive } from '../services/proEntitlements';
+import { MonthlyBudgetsInput, normalizeMonthlyBudgets } from '../services/monthlyBudgets';
 
 const router = Router();
 
@@ -82,21 +83,29 @@ router.post('/chat', requireAuth, async (req: AuthRequest, res: Response) => {
       message,
       expenses,
       monthlyBudget,
+      monthlyBudgets,
+      repeatMonthlyBudget,
       isJoint,
       inputMode,
       history,
       lastIntent,
       lang,
       chipContext,
+      clientToday,
+      timezoneOffsetMinutes,
     } = req.body as {
       message?: string;
       expenses?: BodyExpense[];
       monthlyBudget?: number;
+      monthlyBudgets?: MonthlyBudgetsInput;
+      repeatMonthlyBudget?: boolean;
       isJoint?: boolean;
       inputMode?: 'keyboard' | 'chip';
       history?: { role?: string; text?: string; intent?: string }[];
       lastIntent?: string;
       lang?: 'en' | 'hi';
+      clientToday?: string;
+      timezoneOffsetMinutes?: number;
       chipContext?: {
         afterReply?: string;
         afterIntent?: string;
@@ -112,18 +121,31 @@ router.post('/chat', requireAuth, async (req: AuthRequest, res: Response) => {
     const normalized = normalizeExpenses(expenses);
     const hist = normalizeHistory(history);
 
-    const mode = inputMode === 'chip' ? 'chip' : 'keyboard';
-    const result = await runAssistantChat({
+    const mode: 'chip' | 'keyboard' = inputMode === 'chip' ? 'chip' : 'keyboard';
+    const assistantInput = {
       message: message.trim(),
       userId: req.user?.userId,
       expenses: normalized,
       monthlyBudget: typeof monthlyBudget === 'number' ? monthlyBudget : 0,
+      monthlyBudgets: normalizeMonthlyBudgets(monthlyBudgets),
+      repeatMonthlyBudget: repeatMonthlyBudget === true,
       isJoint: !!isJoint,
       inputMode: mode,
       history: hist,
       lastIntent: typeof lastIntent === 'string' ? lastIntent : undefined,
       lang: lang === 'hi' || lang === 'en' ? lang : undefined,
-    });
+      clientToday:
+        typeof clientToday === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(clientToday)
+          ? clientToday
+          : undefined,
+      timezoneOffsetMinutes:
+        typeof timezoneOffsetMinutes === 'number' &&
+        Number.isFinite(timezoneOffsetMinutes) &&
+        Math.abs(timezoneOffsetMinutes) <= 840
+          ? timezoneOffsetMinutes
+          : undefined,
+    };
+    const result = await runAssistantChat(assistantInput);
 
     if (mode === 'chip') {
       const lastAssistant = [...hist].reverse().find(h => h.role === 'assistant');
@@ -168,14 +190,30 @@ router.post('/precise', requireAuth, async (req: AuthRequest, res: Response) => 
   try {
     if (!(await requireAskPro(req, res))) return;
 
-    const { message, previousReply, expenses, monthlyBudget, isJoint, history, lang } = req.body as {
+    const {
+      message,
+      previousReply,
+      expenses,
+      monthlyBudget,
+      monthlyBudgets,
+      repeatMonthlyBudget,
+      isJoint,
+      history,
+      lang,
+      clientToday,
+      timezoneOffsetMinutes,
+    } = req.body as {
       message?: string;
       previousReply?: string;
       expenses?: BodyExpense[];
       monthlyBudget?: number;
+      monthlyBudgets?: MonthlyBudgetsInput;
+      repeatMonthlyBudget?: boolean;
       isJoint?: boolean;
       history?: { role?: string; text?: string; intent?: string }[];
       lang?: 'en' | 'hi';
+      clientToday?: string;
+      timezoneOffsetMinutes?: number;
     };
 
     if (!message || typeof message !== 'string' || !message.trim()) {
@@ -183,16 +221,29 @@ router.post('/precise', requireAuth, async (req: AuthRequest, res: Response) => 
       return;
     }
 
-    const result = await runPreciseAnswer({
+    const assistantInput = {
       message: message.trim(),
       previousReply: typeof previousReply === 'string' ? previousReply : undefined,
       userId: req.user?.userId,
       expenses: normalizeExpenses(expenses),
       monthlyBudget: typeof monthlyBudget === 'number' ? monthlyBudget : 0,
+      monthlyBudgets: normalizeMonthlyBudgets(monthlyBudgets),
+      repeatMonthlyBudget: repeatMonthlyBudget === true,
       isJoint: !!isJoint,
       history: normalizeHistory(history),
       lang: lang === 'hi' || lang === 'en' ? lang : undefined,
-    });
+      clientToday:
+        typeof clientToday === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(clientToday)
+          ? clientToday
+          : undefined,
+      timezoneOffsetMinutes:
+        typeof timezoneOffsetMinutes === 'number' &&
+        Number.isFinite(timezoneOffsetMinutes) &&
+        Math.abs(timezoneOffsetMinutes) <= 840
+          ? timezoneOffsetMinutes
+          : undefined,
+    };
+    const result = await runPreciseAnswer(assistantInput);
 
     res.json(result);
   } catch (err) {

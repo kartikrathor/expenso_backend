@@ -40,6 +40,15 @@ function categoryAskPatterns(): string[] {
 
 function periodSpendPatterns(): string[] {
   const out: string[] = [...SPEND_ASK_STEMS];
+  const calendarPeriods = [
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+    'september', 'october', 'november', 'december',
+    'last month', 'previous month', 'pichle mahine', 'pichla mahina',
+    'last week', 'previous week', 'pichle hafte', 'last 7 days', 'pichle 7 din',
+  ];
+  for (const p of calendarPeriods) {
+    out.push(`${p} kitna`, `${p} total`, `${p} kharch`, `${p} spent`);
+  }
   for (const p of PERIOD_SYNONYMS.month) {
     out.push(`${p} kitna`, `${p} kharch`, `${p} spent`, `${p} selavu`, `${p} kharchu`);
   }
@@ -98,8 +107,8 @@ const SEED: SeedIntent[] = [
       'today spent', 'aaj ka kharch', 'today total',
     ]),
     templates: [
-      'Today you’ve spent {todayTotal} so far. This month’s total is {total}.',
-      'Aaj aapka kharch {todayTotal} hai. Is month ab tak total {total} ho chuka hai.',
+      'Today you’ve spent {todayTotal} so far. This month’s total is {monthTotal}.',
+      'Aaj aapka kharch {todayTotal} hai. Is month ab tak total {monthTotal} ho chuka hai.',
     ],
     chips: ['Is month kitna?', 'Budget bacha?'],
   },
@@ -391,8 +400,8 @@ const SEED: SeedIntent[] = [
       'रोज कितना', 'प्रति दिन',
     ]),
     templates: [
-      'This month so far, you’re averaging about {avgPerDay} per day (day {dayOfMonth}/{daysInMonth}). Your ideal daily budget is around {dailyBudget}.',
-      'Is month ab tak avg/day ~{avgPerDay} hai (day {dayOfMonth}/{daysInMonth}). Budget ke hisaab se ideal daily ~{dailyBudget} hona chahiye.',
+      'For {period}, your average is about {avgPerDay} per day. Your ideal daily budget is around {dailyBudget}.',
+      '{period} me avg/day ~{avgPerDay} hai. Budget ke hisaab se ideal daily ~{dailyBudget} hona chahiye.',
     ],
     chips: ['Projected month?', 'Kya spending theek?', 'Budget bacha?'],
   },
@@ -416,6 +425,8 @@ const SEED: SeedIntent[] = [
     patterns: uniq([
       'safe daily', 'roz kitna kharch kar sakta', 'daily limit', 'kitna per day bacha',
       'din bhar kitna', 'aage kitna din', 'remaining per day', 'safe spend today',
+      'roj kitna spend karu', 'roz kitna spend karu', 'roz kitna kharch karu',
+      'budget sahi rahe', 'budget theek rahe', 'din me kitna rakhun',
       'आज कितना खर्च',
     ]),
     templates: [

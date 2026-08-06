@@ -3,6 +3,13 @@ import { PersonalExpense } from '../models/PersonalExpense';
 import { User } from '../models/User';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 import { recordCategoryCorrection } from '../services/categoryLearning';
+import {
+  budgetPayload,
+  currentUtcMonth,
+  isValidBudgetAmount,
+  isValidMonthKey,
+  upsertMonthlyBudget,
+} from '../services/monthlyBudgets';
 
 const router = Router();
 
@@ -54,12 +61,20 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
 /** Personal monthly budget (stored on User) */
 router.get('/budget', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const user = await User.findById(req.user!.userId).select('monthlyBudget').lean();
+    const rawMonth = req.query.month;
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
+    const user = await User.findById(req.user!.userId)
+      .select('monthlyBudget monthlyBudgets repeatMonthlyBudget')
+      .lean();
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
-    res.json({ monthlyBudget: user.monthlyBudget ?? 0 });
+    res.json(budgetPayload(user, month));
   } catch (err) {
     console.error('Get personal budget error:', err);
     res.status(500).json({ error: 'Could not get budget' });
@@ -68,21 +83,38 @@ router.get('/budget', requireAuth, async (req: AuthRequest, res: Response) => {
 
 router.patch('/budget', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const amount = Number((req.body as { monthlyBudget?: number }).monthlyBudget);
-    if (!Number.isFinite(amount) || amount < 0) {
+    const { monthlyBudget, month: rawMonth, repeatMonthlyBudget } = req.body as {
+      monthlyBudget?: unknown;
+      month?: unknown;
+      repeatMonthlyBudget?: unknown;
+    };
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
+    if (!isValidBudgetAmount(monthlyBudget)) {
       res.status(400).json({ error: 'monthlyBudget must be a non-negative number' });
       return;
     }
-    const user = await User.findByIdAndUpdate(
-      req.user!.userId,
-      { monthlyBudget: amount },
-      { new: true },
-    ).select('monthlyBudget');
+    if (repeatMonthlyBudget !== undefined && typeof repeatMonthlyBudget !== 'boolean') {
+      res.status(400).json({ error: 'repeatMonthlyBudget must be a boolean' });
+      return;
+    }
+    const user = await User.findById(req.user!.userId).select(
+      'monthlyBudget monthlyBudgets repeatMonthlyBudget',
+    );
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
-    res.json({ monthlyBudget: user.monthlyBudget ?? 0 });
+    user.monthlyBudgets = upsertMonthlyBudget(user.monthlyBudgets, month, monthlyBudget);
+    if (month === currentUtcMonth()) user.monthlyBudget = monthlyBudget;
+    if (typeof repeatMonthlyBudget === 'boolean') {
+      user.repeatMonthlyBudget = repeatMonthlyBudget;
+    }
+    await user.save();
+    res.json(budgetPayload(user, month));
   } catch (err) {
     console.error('Set personal budget error:', err);
     res.status(500).json({ error: 'Could not set budget' });

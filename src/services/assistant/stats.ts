@@ -8,6 +8,8 @@ import {
   expenseMatchesMerchant,
   expenseOnDay,
 } from './transferDate';
+import { AssistantDateRange, expenseInAssistantRange } from './dateRange';
+import { MonthlyBudgetEntry, normalizeMonthlyBudgets } from '../monthlyBudgets';
 
 export type ExpenseInput = {
   amount: number;
@@ -92,9 +94,10 @@ function startOfPeriod(period: Period): Date | null {
 export function filterByPeriod(expenses: ExpenseInput[], period: Period): ExpenseInput[] {
   const start = startOfPeriod(period);
   if (!start) return expenses;
+  const now = new Date();
   return expenses.filter(e => {
     const t = new Date(e.date).getTime();
-    return !Number.isNaN(t) && t >= start.getTime();
+    return !Number.isNaN(t) && t >= start.getTime() && t <= now.getTime();
   });
 }
 
@@ -227,6 +230,8 @@ export type Stats = {
   count: number;
   total: number;
   todayTotal: number;
+  monthTotal: number;
+  monthSpent: number;
   topCategory: string | null;
   topCategoryAmount: number;
   secondTopCategory: string | null;
@@ -243,7 +248,10 @@ export type Stats = {
   dateTotal: number;
   dateCount: number;
   budget: number;
+  budgetMonth: string;
   remaining: number | null;
+  overspend: number;
+  isOverBudget: boolean;
   budgetUsedPct: number | null;
   isJoint: boolean;
   myTotal: number;
@@ -292,7 +300,12 @@ export function computeStats(
     categoryId?: string | null;
     merchantQuery?: string | null;
     calendarDay?: CalendarDay | null;
+    dateRange?: AssistantDateRange | null;
+    timezoneOffsetMinutes?: number;
     monthlyBudget?: number;
+    monthlyBudgets?: MonthlyBudgetEntry[];
+    repeatMonthlyBudget?: boolean;
+    clientToday?: string;
     isJoint?: boolean;
     currentUserId?: string;
     /** Reply language for period labels + health verdict */
@@ -304,7 +317,11 @@ export function computeStats(
   // Specific calendar day overrides relative period for the main list
   let periodList = opts.calendarDay
     ? expenses.filter(e => expenseOnDay(e, opts.calendarDay!))
-    : filterByPeriod(expenses, opts.period);
+    : opts.dateRange
+      ? expenses.filter(e =>
+          expenseInAssistantRange(e.date, opts.dateRange!, opts.timezoneOffsetMinutes),
+        )
+      : filterByPeriod(expenses, opts.period);
 
   if (opts.merchantQuery) {
     periodList = periodList.filter(e => expenseMatchesMerchant(e, opts.merchantQuery!));
@@ -341,26 +358,68 @@ export function computeStats(
   const dateTotal = opts.calendarDay ? total : 0;
   const dateCount = opts.calendarDay ? periodList.length : 0;
 
-  const budget = opts.monthlyBudget || 0;
-  const monthTotal = filterByPeriod(expenses, 'month').reduce((s, e) => s + e.amount, 0);
+  const clientToday =
+    opts.clientToday && /^\d{4}-\d{2}-\d{2}$/.test(opts.clientToday)
+      ? opts.clientToday
+      : new Date().toISOString().slice(0, 10);
+  const currentMonth = clientToday.slice(0, 7);
+  const budgetMonth = opts.calendarDay
+    ? `${opts.calendarDay.y}-${String(opts.calendarDay.m + 1).padStart(2, '0')}`
+    : opts.dateRange?.start.slice(0, 7) || currentMonth;
+  const budgetEntries = normalizeMonthlyBudgets(opts.monthlyBudgets);
+  const exactBudget = budgetEntries.find(entry => entry.month === budgetMonth);
+  const repeatedBudget = opts.repeatMonthlyBudget
+    ? [...budgetEntries].reverse().find(entry => entry.month < budgetMonth)
+    : undefined;
+  const legacyBudget =
+    budgetMonth === currentMonth && Number.isFinite(opts.monthlyBudget)
+      ? Math.max(0, opts.monthlyBudget || 0)
+      : 0;
+  const budget = exactBudget?.amount ?? repeatedBudget?.amount ?? legacyBudget;
+  const monthTotal = expenses
+    .filter(e => {
+      const timestamp = new Date(e.date).getTime();
+      if (Number.isNaN(timestamp)) return false;
+      const localTimestamp = timestamp - (opts.timezoneOffsetMinutes || 0) * 60_000;
+      return new Date(localTimestamp).toISOString().slice(0, 7) === budgetMonth;
+    })
+    .reduce((s, e) => s + e.amount, 0);
   const remaining = budget > 0 ? Math.max(0, budget - monthTotal) : null;
+  const overspend = budget > 0 ? Math.max(0, monthTotal - budget) : 0;
+  const isOverBudget = overspend > 0;
   const budgetUsedPct = budget > 0 ? Math.round((monthTotal / budget) * 100) : null;
 
   const members = computeMemberBreakdown(periodList, opts.currentUserId);
   const groups = computeGroupBreakdown(periodList);
 
-  const now = new Date();
-  const dayOfMonth = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const isCurrentBudgetMonth = budgetMonth === currentMonth;
+  const [budgetYear, budgetMonthNumber] = budgetMonth.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(budgetYear, budgetMonthNumber, 0)).getUTCDate();
+  const dayOfMonth = isCurrentBudgetMonth ? Number(clientToday.slice(8, 10)) : daysInMonth;
   const daysLeft = Math.max(0, daysInMonth - dayOfMonth);
-  const avgPerDay = dayOfMonth > 0 ? monthTotal / dayOfMonth : 0;
+  let avgPerDay = dayOfMonth > 0 ? monthTotal / dayOfMonth : 0;
+  if (opts.dateRange) {
+    const effectiveEnd = opts.dateRange.end < clientToday
+      ? opts.dateRange.end
+      : clientToday;
+    const startMs = new Date(`${opts.dateRange.start}T00:00:00.000Z`).getTime();
+    const endMs = new Date(`${effectiveEnd}T00:00:00.000Z`).getTime();
+    const rangeDays = Math.max(1, Math.floor((endMs - startMs) / 86_400_000) + 1);
+    avgPerDay = total / rangeDays;
+  }
   const avgTxn = periodList.length > 0 ? total / periodList.length : 0;
   const dailyBudget = budget > 0 ? budget / daysInMonth : 0;
   const idealSpendSoFar = dailyBudget * dayOfMonth;
-  const projectedMonth = avgPerDay * daysInMonth;
+  const projectedMonth = isCurrentBudgetMonth ? avgPerDay * daysInMonth : monthTotal;
   const topCut10 = (topCat ? topCat[1] : 0) * 0.1;
   const topCut20 = (topCat ? topCat[1] : 0) * 0.2;
-  const safeDaily = remaining != null && daysLeft > 0 ? remaining / daysLeft : dailyBudget;
+  const safeDaily = isCurrentBudgetMonth
+    ? remaining != null && daysLeft > 0
+      ? remaining / daysLeft
+      : isOverBudget
+        ? 0
+        : dailyBudget
+    : 0;
 
   let paceStatus: Stats['paceStatus'] = 'no_budget';
   let healthVerdict =
@@ -373,8 +432,14 @@ export function computeStats(
       paceStatus = 'over_budget';
       healthVerdict =
         lang === 'en'
-          ? `You're over budget — ${budgetUsedPct}% used. Stick to essentials for now.`
-          : `Budget cross ho chuka hai — ${budgetUsedPct}% use ho gaya. Ab sirf zaroori kharch karo.`;
+          ? `${budgetMonth} is over budget by ${formatINR(overspend)} — ${budgetUsedPct}% used.`
+          : `${budgetMonth} ka budget ${formatINR(overspend)} se cross hua — ${budgetUsedPct}% use hua.`;
+    } else if (!isCurrentBudgetMonth) {
+      paceStatus = 'on_track';
+      healthVerdict =
+        lang === 'en'
+          ? `${budgetMonth} closed with ${formatINR(monthTotal)} spent and ${formatINR(remaining ?? 0)} remaining.`
+          : `${budgetMonth} me ${formatINR(monthTotal)} kharch hua aur ${formatINR(remaining ?? 0)} bacha.`;
     } else if (usedIdealPct > 1.15) {
       paceStatus = 'fast';
       healthVerdict =
@@ -398,6 +463,10 @@ export function computeStats(
 
   const periodLabel = opts.calendarDay
     ? opts.calendarDay.label
+    : opts.dateRange
+      ? lang === 'hi'
+        ? opts.dateRange.labelHi
+        : opts.dateRange.labelEn
     : PERIOD_LABEL[opts.period];
 
   return {
@@ -406,6 +475,8 @@ export function computeStats(
     count: periodList.length,
     total,
     todayTotal,
+    monthTotal,
+    monthSpent: monthTotal,
     topCategory: topCat ? categoryLabel(topCat[0]) : null,
     topCategoryAmount: topCat ? topCat[1] : 0,
     secondTopCategory: secondCat ? categoryLabel(secondCat[0]) : null,
@@ -422,7 +493,10 @@ export function computeStats(
     dateTotal,
     dateCount,
     budget,
+    budgetMonth,
     remaining,
+    overspend,
+    isOverBudget,
     budgetUsedPct,
     isJoint: !!opts.isJoint,
     myTotal: members.myTotal,
@@ -458,6 +532,8 @@ export function fillTemplate(template: string, stats: Stats): string {
     '{period}': stats.periodLabel,
     '{total}': formatINR(stats.total),
     '{todayTotal}': formatINR(stats.todayTotal),
+    '{monthTotal}': formatINR(stats.monthTotal),
+    '{monthSpent}': formatINR(stats.monthSpent),
     '{count}': String(stats.count),
     '{topCategory}': stats.topCategory || 'Other',
     '{topCategoryAmount}': formatINR(stats.topCategoryAmount),
@@ -475,7 +551,10 @@ export function fillTemplate(template: string, stats: Stats): string {
     '{dateTotal}': formatINR(stats.dateTotal || stats.total),
     '{dateCount}': String(stats.dateCount || stats.count),
     '{budget}': formatINR(stats.budget),
+    '{budgetMonth}': stats.budgetMonth,
     '{remaining}': stats.remaining != null ? formatINR(stats.remaining) : '—',
+    '{overspend}': formatINR(stats.overspend),
+    '{isOverBudget}': stats.isOverBudget ? 'yes' : 'no',
     '{budgetUsedPct}': stats.budgetUsedPct != null ? `${stats.budgetUsedPct}%` : '—',
     '{scope}': stats.isJoint ? 'joint account' : 'personal',
     '{myTotal}': formatINR(stats.myTotal),

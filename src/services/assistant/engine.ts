@@ -45,6 +45,8 @@ import {
   appGuideLlmBlock,
   isAppGuideQuestion,
 } from './appGuide';
+import { detectAssistantDateRange } from './dateRange';
+import { MonthlyBudgetEntry } from '../monthlyBudgets';
 
 export type ChatResult = {
   reply: string;
@@ -188,7 +190,11 @@ function statsBrief(stats: Stats): string {
       ? `date=${stats.dateLabel} total=${formatINR(stats.dateTotal)} count=${stats.dateCount}`
       : null,
     `budget=${formatINR(stats.budget)}`,
+    `budgetMonth=${stats.budgetMonth}`,
+    `monthSpent=${formatINR(stats.monthSpent)}`,
     `remaining=${stats.remaining != null ? formatINR(stats.remaining) : 'n/a'}`,
+    `overspend=${formatINR(stats.overspend)}`,
+    `isOverBudget=${stats.isOverBudget}`,
     `budgetUsedPct=${stats.budgetUsedPct ?? 'n/a'}`,
     `scope=${stats.isJoint ? 'joint' : 'personal'}`,
     `myTotal=${formatINR(stats.myTotal)} (${stats.myCount})`,
@@ -235,9 +241,13 @@ export async function runPreciseAnswer(input: {
   userId?: string;
   expenses: ExpenseInput[];
   monthlyBudget?: number;
+  monthlyBudgets?: MonthlyBudgetEntry[];
+  repeatMonthlyBudget?: boolean;
   isJoint?: boolean;
   history?: HistoryTurn[];
   lang?: ChatLang;
+  clientToday?: string;
+  timezoneOffsetMinutes?: number;
 }): Promise<ChatResult> {
   const policy = resolveLangPolicy(input.message || '', input.lang);
   const lang = policy.replyLang;
@@ -278,9 +288,17 @@ export async function runPreciseAnswer(input: {
     );
   }
 
+  const preciseRange = detectAssistantDateRange(input.message, input.clientToday);
+  const preciseDay = detectCalendarDate(input.message);
   const stats = computeStats(input.expenses || [], {
-    period: 'month',
+    period: preciseDay ? 'all' : detectPeriod(input.message),
+    calendarDay: preciseDay,
+    dateRange: preciseDay ? null : preciseRange,
+    timezoneOffsetMinutes: input.timezoneOffsetMinutes,
     monthlyBudget: input.monthlyBudget || 0,
+    monthlyBudgets: input.monthlyBudgets,
+    repeatMonthlyBudget: input.repeatMonthlyBudget,
+    clientToday: input.clientToday,
     isJoint: input.isJoint,
     currentUserId: input.userId,
     lang,
@@ -288,6 +306,9 @@ export async function runPreciseAnswer(input: {
   const statsAll = computeStats(input.expenses || [], {
     period: 'all',
     monthlyBudget: input.monthlyBudget || 0,
+    monthlyBudgets: input.monthlyBudgets,
+    repeatMonthlyBudget: input.repeatMonthlyBudget,
+    clientToday: input.clientToday,
     isJoint: input.isJoint,
     currentUserId: input.userId,
     lang,
@@ -340,7 +361,7 @@ export async function runPreciseAnswer(input: {
           (input.previousReply
             ? `Previous quick reply (user rejected this — learn from the mistake):\n${input.previousReply.slice(0, 500)}\n\n`
             : '') +
-          `Verified stats (this month):\n${statsBrief(stats)}\n\n` +
+          `Verified stats (requested period):\n${statsBrief(stats)}\n\n` +
           `Verified stats (all time):\n${statsBrief(statsAll)}\n\n` +
           `Recent expenses (newest first, hidden from user UI):\n${ledger}`,
       },
@@ -531,12 +552,16 @@ export async function runAssistantChat(input: {
   userId?: string;
   expenses: ExpenseInput[];
   monthlyBudget?: number;
+  monthlyBudgets?: MonthlyBudgetEntry[];
+  repeatMonthlyBudget?: boolean;
   isJoint?: boolean;
   /** keyboard = typed; chip = suggestion tap (cheaper / free) */
   inputMode?: 'keyboard' | 'chip';
   history?: HistoryTurn[];
   lastIntent?: string;
   lang?: ChatLang;
+  clientToday?: string;
+  timezoneOffsetMinutes?: number;
 }): Promise<ChatResult> {
   const inputMode = input.inputMode === 'chip' ? 'chip' : 'keyboard';
   const policy = resolveLangPolicy(input.message || '', input.lang);
@@ -642,9 +667,20 @@ export async function runAssistantChat(input: {
   );
 
   const periodHint = follow.forcedPeriod || detectPeriod(scoreText);
+  const dateRange =
+    detectAssistantDateRange(input.message, input.clientToday) ||
+    detectAssistantDateRange(scoreText, input.clientToday);
+  const baseCalendarDay =
+    detectCalendarDate(input.message) || detectCalendarDate(scoreText);
   const baseStats = computeStats(input.expenses || [], {
-    period: periodHint,
+    period: baseCalendarDay ? 'all' : periodHint,
+    calendarDay: baseCalendarDay,
+    dateRange: baseCalendarDay ? null : dateRange,
+    timezoneOffsetMinutes: input.timezoneOffsetMinutes,
     monthlyBudget: input.monthlyBudget || 0,
+    monthlyBudgets: input.monthlyBudgets,
+    repeatMonthlyBudget: input.repeatMonthlyBudget,
+    clientToday: input.clientToday,
     isJoint: input.isJoint,
     currentUserId: input.userId,
     lang,
@@ -754,7 +790,6 @@ export async function runAssistantChat(input: {
   const monthIntents = [
     'budget_left',
     'budget_health',
-    'daily_avg',
     'projected_month',
     'safe_daily',
     'saving_tips',
@@ -765,12 +800,11 @@ export async function runAssistantChat(input: {
   ];
   if (monthIntents.includes(bestKey) && !follow.forcedPeriod) period = 'month';
 
-  const categoryId = detectCategory(scoreText) || detectCategory(input.message);
+  const categoryId = detectCategory(input.message) || detectCategory(scoreText);
   const merchantHit =
-    detectMerchantFromExpenses(scoreText, input.expenses || []) ||
-    detectMerchantFromExpenses(input.message, input.expenses || []);
-  const calendarDay =
-    detectCalendarDate(scoreText) || detectCalendarDate(input.message);
+    detectMerchantFromExpenses(input.message, input.expenses || []) ||
+    detectMerchantFromExpenses(scoreText, input.expenses || []);
+  const calendarDay = baseCalendarDay;
 
   let intentKey = bestKey;
   let doc = bestDoc;
@@ -808,6 +842,15 @@ export async function runAssistantChat(input: {
     if (dDoc) {
       intentKey = 'on_date';
       doc = dDoc;
+    }
+  } else if (
+    categoryId &&
+    /\b(kitna|kitne|kharch|kharc|spent|spend|total|expense|expenses)\b/i.test(scoreText)
+  ) {
+    const cDoc = intents.find(i => i.key === 'by_category');
+    if (cDoc) {
+      intentKey = 'by_category';
+      doc = cDoc;
     }
   }
 
@@ -894,7 +937,12 @@ export async function runAssistantChat(input: {
       period: calendarDay ? 'all' : period,
       merchantQuery: merchantHit.query,
       calendarDay,
+      dateRange: calendarDay ? null : dateRange,
+      timezoneOffsetMinutes: input.timezoneOffsetMinutes,
       monthlyBudget: input.monthlyBudget || 0,
+      monthlyBudgets: input.monthlyBudgets,
+      repeatMonthlyBudget: input.repeatMonthlyBudget,
+      clientToday: input.clientToday,
       isJoint: input.isJoint,
       currentUserId: input.userId,
       lang,
@@ -947,6 +995,9 @@ export async function runAssistantChat(input: {
       period: 'all',
       calendarDay,
       monthlyBudget: input.monthlyBudget || 0,
+      monthlyBudgets: input.monthlyBudgets,
+      repeatMonthlyBudget: input.repeatMonthlyBudget,
+      clientToday: input.clientToday,
       isJoint: input.isJoint,
       currentUserId: input.userId,
       lang,
@@ -996,7 +1047,12 @@ export async function runAssistantChat(input: {
   const stats = computeStats(input.expenses || [], {
     period,
     categoryId: intentKey === 'by_category' ? categoryId : null,
+    dateRange,
+    timezoneOffsetMinutes: input.timezoneOffsetMinutes,
     monthlyBudget: input.monthlyBudget || 0,
+    monthlyBudgets: input.monthlyBudgets,
+    repeatMonthlyBudget: input.repeatMonthlyBudget,
+    clientToday: input.clientToday,
     isJoint: input.isJoint,
     currentUserId: input.userId,
     lang,
@@ -1024,6 +1080,32 @@ export async function runAssistantChat(input: {
     );
   }
 
+  const currentClientMonth = (input.clientToday || new Date().toISOString()).slice(0, 7);
+  const historicalPaceIntent =
+    stats.budgetMonth !== currentClientMonth &&
+    ['budget_health', 'projected_month', 'safe_daily'].includes(intentKey);
+  if (historicalPaceIntent) {
+    const reply = stats.isOverBudget
+      ? lang === 'en'
+        ? `${stats.budgetMonth}: you spent ${formatINR(stats.monthSpent)} against a ${formatINR(stats.budget)} budget — ${formatINR(stats.overspend)} over.`
+        : `${stats.budgetMonth}: ${formatINR(stats.budget)} budget ke against ${formatINR(stats.monthSpent)} kharch hua — ${formatINR(stats.overspend)} over.`
+      : stats.budget > 0
+        ? stats.healthVerdict
+        : lang === 'en'
+          ? `${stats.budgetMonth} is closed; actual spend was ${formatINR(stats.monthSpent)}. A current-month pace or safe-daily figure does not apply.`
+          : `${stats.budgetMonth} close ho chuka hai; actual kharch ${formatINR(stats.monthSpent)} tha. Current-month pace ya safe-daily yahan apply nahi hota.`;
+    return wt(
+      {
+        reply,
+        intent: intentKey,
+        chips: doc.chips?.length ? doc.chips : FALLBACK_CHIPS,
+        matched: true,
+        source: 'rules',
+      },
+      spend,
+    );
+  }
+
   if (
     (intentKey === 'budget_left' || intentKey === 'budget_health' || intentKey === 'safe_daily') &&
     stats.budget <= 0
@@ -1036,6 +1118,25 @@ export async function runAssistantChat(input: {
             : 'Abhi monthly budget set nahi hai. Home pe Budget save karo — phir main pace, safe/day aur “kya spending theek” bataunga.',
         intent: intentKey,
         chips: ['Is month kitna kharch?', 'Save kaise?', 'Top category'],
+        matched: true,
+        source: 'rules',
+      },
+      spend,
+    );
+  }
+
+  const overBudgetIntent = stats.isOverBudget &&
+    ['budget_left', 'budget_health', 'projected_month', 'safe_daily'].includes(intentKey);
+  if (overBudgetIntent) {
+    const reply =
+      lang === 'en'
+        ? `${stats.budgetMonth}: you spent ${formatINR(stats.monthSpent)} against a ${formatINR(stats.budget)} budget — ${formatINR(stats.overspend)} over.`
+        : `${stats.budgetMonth}: ${formatINR(stats.budget)} budget ke against ${formatINR(stats.monthSpent)} kharch hua — ${formatINR(stats.overspend)} over.`;
+    return wt(
+      {
+        reply,
+        intent: intentKey,
+        chips: doc.chips?.length ? doc.chips : FALLBACK_CHIPS,
         matched: true,
         source: 'rules',
       },
@@ -1079,7 +1180,9 @@ export async function runAssistantChat(input: {
   }
 
   // Prefer a reply shape learned from Gemini / “more accurate” when it fits this Q
-  const learned = await pickLearnedRulesReply(input.message, intentKey, stats, lang);
+  const learned = follow.usedContext
+    ? null
+    : await pickLearnedRulesReply(input.message, intentKey, stats, lang);
   const reply =
     learned || fillTemplate(pickTemplate(doc.templates || [], lang), stats);
 

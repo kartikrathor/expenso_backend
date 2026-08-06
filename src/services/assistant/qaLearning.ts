@@ -56,14 +56,22 @@ export function qaFingerprint(keywords: string[]): string {
 }
 
 /** Scrub ₹ / numbers so samples teach tone, not stale figures. */
-export function sanitizeSampleAnswer(answer: string): string {
-  return answer
+export function sanitizeSampleAnswer(answer: string, stats?: Stats): string {
+  let sanitized = answer
     .replace(/₹\s*[\d,]+(\.\d+)?/g, '₹[amount]')
     .replace(/\bRs\.?\s*[\d,]+(\.\d+)?/gi, '₹[amount]')
     .replace(/\b\d{1,3}(,\d{3})+(\.\d+)?\b/g, '[amount]')
-    .replace(/\b\d+(\.\d+)?\s*%/g, '[pct]%')
-    .slice(0, 400)
-    .trim();
+    .replace(/\b\d+(\.\d+)?\s*%/g, '[pct]%');
+  const privateLabels = [
+    stats?.biggest?.merchantLabel,
+    stats?.topMerchant,
+    stats?.merchantQuery,
+    stats?.partnerName && stats.partnerName !== 'Partner' ? stats.partnerName : undefined,
+  ].filter((value): value is string => !!value && value.length >= 2);
+  for (const value of privateLabels) {
+    sanitized = sanitized.split(value).join('[name]');
+  }
+  return sanitized.slice(0, 400).trim();
 }
 
 export function deriveStyleHint(question: string, answer: string): string {
@@ -138,6 +146,7 @@ export function answerToTemplate(answer: string, stats: Stats): string | null {
     { value: formatINR(stats.partnerTotal), ph: '{partnerTotal}' },
     { value: formatINR(stats.myTotal), ph: '{myTotal}' },
     { value: formatINR(stats.todayTotal), ph: '{todayTotal}' },
+    { value: formatINR(stats.monthTotal), ph: '{monthTotal}' },
     { value: formatINR(stats.avgPerDay), ph: '{avgPerDay}' },
     { value: formatINR(stats.avgTxn), ph: '{avgTxn}' },
     { value: formatINR(stats.dailyBudget), ph: '{dailyBudget}' },
@@ -146,6 +155,7 @@ export function answerToTemplate(answer: string, stats: Stats): string | null {
     { value: formatINR(stats.topCut20), ph: '{topCut20}' },
     { value: formatINR(stats.total), ph: '{total}' },
     { value: formatINR(stats.budget), ph: '{budget}' },
+    { value: formatINR(stats.overspend), ph: '{overspend}' },
     {
       value: stats.remaining != null ? formatINR(stats.remaining) : '',
       ph: '{remaining}',
@@ -167,6 +177,7 @@ export function answerToTemplate(answer: string, stats: Stats): string | null {
     pairs.push({ value: stats.partnerName, ph: '{partnerName}' });
   }
   if (stats.periodLabel) pairs.push({ value: stats.periodLabel, ph: '{period}' });
+  if (stats.budgetMonth) pairs.push({ value: stats.budgetMonth, ph: '{budgetMonth}' });
   if (stats.dateLabel) pairs.push({ value: stats.dateLabel, ph: '{dateLabel}' });
   if (stats.memberSplitText && stats.memberSplitText !== '—') {
     pairs.push({ value: stats.memberSplitText, ph: '{memberSplit}' });
@@ -350,7 +361,7 @@ export async function learnFromLlmExchange(input: {
 
     const fingerprint = qaFingerprint(keywords);
     const styleHint = deriveStyleHint(question, answer);
-    const sampleAnswer = sanitizeSampleAnswer(answer);
+    const sampleAnswer = sanitizeSampleAnswer(answer, input.stats);
     const replyTemplate = input.stats ? answerToTemplate(answer, input.stats) : null;
     const userId = input.userId?.trim();
     const wasCorrection = input.source === 'precise';

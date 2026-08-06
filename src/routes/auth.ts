@@ -575,7 +575,16 @@ router.delete('/me/data', requireAuth, async (req: AuthRequest, res: Response) =
       UserCategory.deleteMany({ user: uid }),
     ]);
 
-    await User.updateOne({ _id: uid }, { $set: { monthlyBudget: 0 } });
+    await User.updateOne(
+      { _id: uid },
+      {
+        $set: {
+          monthlyBudget: 0,
+          monthlyBudgets: [],
+          repeatMonthlyBudget: false,
+        },
+      },
+    );
 
     res.json({
       message: 'All personal data cleared; account kept',

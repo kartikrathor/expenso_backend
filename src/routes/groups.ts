@@ -3,6 +3,14 @@ import { customAlphabet } from 'nanoid';
 import { Types } from 'mongoose';
 import { Group } from '../models/Group';
 import { AuthRequest, requireAuth } from '../middleware/auth';
+import {
+  budgetPayload,
+  currentUtcMonth,
+  isValidBudgetAmount,
+  isValidMonthKey,
+  resolveMonthlyBudget,
+  upsertMonthlyBudget,
+} from '../services/monthlyBudgets';
 
 const router = Router();
 const makeInviteCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 8);
@@ -11,14 +19,14 @@ function isMember(group: { members: { user: { toString(): string } }[] }, userId
   return group.members.some(m => m.user.toString() === userId);
 }
 
-function groupPayload(g: InstanceType<typeof Group>) {
+function groupPayload(g: InstanceType<typeof Group>, month = currentUtcMonth()) {
   return {
     id: g.id,
     name: g.name,
     emoji: g.emoji,
     inviteCode: g.inviteCode,
     memberCount: g.members.length,
-    monthlyBudget: g.monthlyBudget ?? 0,
+    ...budgetPayload(g, month),
     createdBy: g.createdBy,
   };
 }
@@ -27,13 +35,19 @@ function groupPayload(g: InstanceType<typeof Group>) {
 router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
+    const rawMonth = req.query.month;
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
     const groups = await Group.find({ 'members.user': userId })
       .populate('members.user', 'name email avatarColor')
       .sort({ updatedAt: -1 });
 
     res.json({
       groups: groups.map(g => ({
-        ...groupPayload(g),
+        ...groupPayload(g, month),
         members: g.members,
       })),
     });
@@ -47,10 +61,12 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
 router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { name, emoji, monthlyBudget } = req.body as {
+    const { name, emoji, monthlyBudget, month: rawMonth, repeatMonthlyBudget } = req.body as {
       name?: string;
       emoji?: string;
-      monthlyBudget?: number;
+      monthlyBudget?: unknown;
+      month?: unknown;
+      repeatMonthlyBudget?: unknown;
     };
 
     if (!name?.trim()) {
@@ -58,21 +74,36 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const budget =
-      typeof monthlyBudget === 'number' && monthlyBudget > 0 ? monthlyBudget : 0;
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
+    if (monthlyBudget !== undefined && !isValidBudgetAmount(monthlyBudget)) {
+      res.status(400).json({ error: 'monthlyBudget must be a non-negative number' });
+      return;
+    }
+    if (repeatMonthlyBudget !== undefined && typeof repeatMonthlyBudget !== 'boolean') {
+      res.status(400).json({ error: 'repeatMonthlyBudget must be a boolean' });
+      return;
+    }
 
     const inviteCode = makeInviteCode();
+    const budget = isValidBudgetAmount(monthlyBudget) ? monthlyBudget : 0;
     const group = await Group.create({
       name: name.trim(),
       emoji: emoji?.trim() || '👥',
       createdBy: userId,
       inviteCode,
-      monthlyBudget: budget,
+      monthlyBudget: month === currentUtcMonth() ? budget : 0,
+      monthlyBudgets:
+        monthlyBudget === undefined ? [] : [{ month, amount: budget }],
+      repeatMonthlyBudget: repeatMonthlyBudget ?? false,
       members: [{ user: userId, role: 'owner', joinedAt: new Date() }],
     });
 
     res.status(201).json({
-      group: groupPayload(group),
+      group: groupPayload(group, month),
     });
   } catch (err) {
     console.error('Create group error:', err);
@@ -84,13 +115,28 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
 router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { inviteCode, monthlyBudget } = req.body as {
+    const { inviteCode, monthlyBudget, month: rawMonth, repeatMonthlyBudget } = req.body as {
       inviteCode?: string;
-      monthlyBudget?: number;
+      monthlyBudget?: unknown;
+      month?: unknown;
+      repeatMonthlyBudget?: unknown;
     };
 
     if (!inviteCode?.trim()) {
       res.status(400).json({ error: 'Invite code is required' });
+      return;
+    }
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
+    if (monthlyBudget !== undefined && !isValidBudgetAmount(monthlyBudget)) {
+      res.status(400).json({ error: 'monthlyBudget must be a non-negative number' });
+      return;
+    }
+    if (repeatMonthlyBudget !== undefined && typeof repeatMonthlyBudget !== 'boolean') {
+      res.status(400).json({ error: 'repeatMonthlyBudget must be a boolean' });
       return;
     }
 
@@ -100,18 +146,30 @@ router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const joinerBudget =
-      typeof monthlyBudget === 'number' && monthlyBudget > 0 ? monthlyBudget : 0;
-    const mergedBudget = Math.max(group.monthlyBudget ?? 0, joinerBudget);
-    if (mergedBudget !== (group.monthlyBudget ?? 0)) {
-      group.monthlyBudget = mergedBudget;
+    if (isValidBudgetAmount(monthlyBudget)) {
+      const existingBudget = resolveMonthlyBudget({
+        month,
+        monthlyBudgets: group.monthlyBudgets,
+        repeatMonthlyBudget: group.repeatMonthlyBudget,
+        legacyMonthlyBudget: group.monthlyBudget,
+      });
+      const mergedBudget = Math.max(existingBudget, monthlyBudget);
+      group.monthlyBudgets = upsertMonthlyBudget(
+        group.monthlyBudgets,
+        month,
+        mergedBudget,
+      );
+      if (month === currentUtcMonth()) group.monthlyBudget = mergedBudget;
+    }
+    if (typeof repeatMonthlyBudget === 'boolean') {
+      group.repeatMonthlyBudget = repeatMonthlyBudget;
     }
 
     if (isMember(group, userId)) {
       await group.save();
       res.status(200).json({
         message: 'Already a member',
-        group: groupPayload(group),
+        group: groupPayload(group, month),
       });
       return;
     }
@@ -125,7 +183,7 @@ router.post('/join', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({
       message: 'Joined group',
-      group: groupPayload(group),
+      group: groupPayload(group, month),
     });
   } catch (err) {
     console.error('Join group error:', err);
@@ -184,24 +242,46 @@ router.patch('/:id/budget', requireAuth, async (req: AuthRequest, res: Response)
       return;
     }
 
-    const { monthlyBudget, mergeMax } = req.body as {
-      monthlyBudget?: number;
+    const { monthlyBudget, mergeMax, month: rawMonth, repeatMonthlyBudget } = req.body as {
+      monthlyBudget?: unknown;
       mergeMax?: boolean;
+      month?: unknown;
+      repeatMonthlyBudget?: unknown;
     };
 
-    if (typeof monthlyBudget !== 'number' || monthlyBudget < 0) {
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
+    if (!isValidBudgetAmount(monthlyBudget)) {
       res.status(400).json({ error: 'monthlyBudget must be a non-negative number' });
       return;
     }
+    if (repeatMonthlyBudget !== undefined && typeof repeatMonthlyBudget !== 'boolean') {
+      res.status(400).json({ error: 'repeatMonthlyBudget must be a boolean' });
+      return;
+    }
 
-    if (mergeMax) {
-      group.monthlyBudget = Math.max(group.monthlyBudget ?? 0, monthlyBudget);
-    } else {
-      group.monthlyBudget = monthlyBudget;
+    const amount = mergeMax
+      ? Math.max(
+          resolveMonthlyBudget({
+            month,
+            monthlyBudgets: group.monthlyBudgets,
+            repeatMonthlyBudget: group.repeatMonthlyBudget,
+            legacyMonthlyBudget: group.monthlyBudget,
+          }),
+          monthlyBudget,
+        )
+      : monthlyBudget;
+    group.monthlyBudgets = upsertMonthlyBudget(group.monthlyBudgets, month, amount);
+    if (month === currentUtcMonth()) group.monthlyBudget = amount;
+    if (typeof repeatMonthlyBudget === 'boolean') {
+      group.repeatMonthlyBudget = repeatMonthlyBudget;
     }
     await group.save();
 
-    res.json({ group: groupPayload(group) });
+    res.json({ group: groupPayload(group, month) });
   } catch (err) {
     console.error('Update budget error:', err);
     res.status(500).json({ error: 'Could not update budget' });
@@ -212,6 +292,12 @@ router.patch('/:id/budget', requireAuth, async (req: AuthRequest, res: Response)
 router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
+    const rawMonth = req.query.month;
+    const month = rawMonth === undefined ? currentUtcMonth() : rawMonth;
+    if (!isValidMonthKey(month)) {
+      res.status(400).json({ error: 'month must use YYYY-MM format' });
+      return;
+    }
     const group = await Group.findById(req.params.id).populate(
       'members.user',
       'name email avatarColor',
@@ -230,7 +316,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       group: {
         ...group.toObject(),
         id: group.id,
-        monthlyBudget: group.monthlyBudget ?? 0,
+        ...budgetPayload(group, month),
       },
     });
   } catch (err) {
