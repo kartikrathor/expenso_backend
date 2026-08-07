@@ -16,10 +16,11 @@ import {
   verifyStorePurchase,
   verifyThemeStorePurchase,
 } from '../services/iapVerify';
+import { fetchPlayStorePrices } from '../services/playStorePrices';
 
 const router = Router();
 
-/** Public catalog — prices from admin */
+/** Public catalog — display prices from Google Play (fallback region IN). */
 router.get('/catalog', async (_req, res: Response) => {
   try {
     await ensureProCatalog();
@@ -28,13 +29,25 @@ router.get('/catalog', async (_req, res: Response) => {
       .sort({ sortOrder: 1 })
       .lean();
     const skus = await resolveProductSkus();
+    const storePrices = await fetchPlayStorePrices('IN');
+    const proMonthly = storePrices.proMonthly;
+    const proYearly = storePrices.proYearly;
+    const themeMonthly = storePrices.themeMonthly;
+    const themePermanent = storePrices.themePermanent;
+    const currency =
+      proMonthly?.currency ||
+      themePermanent?.currency ||
+      plan?.currency ||
+      'INR';
     res.json({
       pro: plan
         ? {
             name: plan.name,
-            monthlyPrice: plan.monthlyPrice,
-            yearlyPrice: plan.yearlyPrice,
-            currency: plan.currency || 'INR',
+            monthlyPrice: proMonthly?.amount ?? plan.monthlyPrice,
+            yearlyPrice: proYearly?.amount ?? plan.yearlyPrice,
+            monthlyPriceFormatted: proMonthly?.formatted || null,
+            yearlyPriceFormatted: proYearly?.formatted || null,
+            currency,
             dailyTokens: plan.dailyTokens,
             monthlyLabel: plan.monthlyLabel,
             yearlyLabel: plan.yearlyLabel,
@@ -50,9 +63,11 @@ router.get('/catalog', async (_req, res: Response) => {
       themes: themes.map((t) => ({
         packId: t.packId,
         name: t.name,
-        monthlyPrice: t.monthlyPrice,
-        permanentPrice: t.permanentPrice,
-        currency: t.currency || 'INR',
+        monthlyPrice: themeMonthly?.amount ?? t.monthlyPrice,
+        permanentPrice: themePermanent?.amount ?? t.permanentPrice,
+        monthlyPriceFormatted: themeMonthly?.formatted || null,
+        permanentPriceFormatted: themePermanent?.formatted || null,
+        currency: themePermanent?.currency || themeMonthly?.currency || currency,
         includedInPro: t.includedInPro === true,
         monthlyLabel: t.monthlyLabel,
         permanentLabel: t.permanentLabel,
@@ -67,6 +82,7 @@ router.get('/catalog', async (_req, res: Response) => {
         monthlySku: SHARED_THEME_SKUS.monthly,
         permanentSku: SHARED_THEME_SKUS.permanent,
       },
+      storePrices,
     });
   } catch (err) {
     console.error('Pro catalog error:', err);

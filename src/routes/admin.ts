@@ -38,6 +38,7 @@ import {
   getProPlanConfig,
   SHARED_THEME_SKUS,
 } from '../services/proEntitlements';
+import { fetchPlayStorePrices } from '../services/playStorePrices';
 import {
   generateOtp,
   generateVerificationToken,
@@ -1244,11 +1245,14 @@ router.get(
 );
 
 /** —— Pro plan config —— */
-router.get('/pro-plan', async (_req: AuthRequest, res: Response) => {
+router.get('/pro-plan', async (req: AuthRequest, res: Response) => {
   try {
     await ensureProCatalog();
     const plan = await getProPlanConfig();
-    res.json({ plan });
+    const region =
+      typeof req.query.region === 'string' ? req.query.region : 'IN';
+    const storePrices = await fetchPlayStorePrices(region);
+    res.json({ plan, storePrices });
   } catch (err) {
     console.error('Admin pro-plan get error:', err);
     res.status(500).json({ error: 'Could not load Pro plan' });
@@ -1260,11 +1264,9 @@ router.patch('/pro-plan', async (req: AuthRequest, res: Response) => {
     await ensureProCatalog();
     const body = req.body as Record<string, unknown>;
     const $set: Record<string, unknown> = {};
+    // Prices come from Play Console only — ignore monthlyPrice/yearlyPrice/currency.
     for (const key of [
       'name',
-      'monthlyPrice',
-      'yearlyPrice',
-      'currency',
       'dailyTokens',
       'monthlyLabel',
       'yearlyLabel',
@@ -1283,7 +1285,8 @@ router.patch('/pro-plan', async (req: AuthRequest, res: Response) => {
       { $set },
       { new: true }
     );
-    res.json({ plan });
+    const storePrices = await fetchPlayStorePrices('IN');
+    res.json({ plan, storePrices });
   } catch (err) {
     console.error('Admin pro-plan patch error:', err);
     res.status(500).json({ error: 'Could not update Pro plan' });
@@ -1291,11 +1294,14 @@ router.patch('/pro-plan', async (req: AuthRequest, res: Response) => {
 });
 
 /** —— Theme pack pricing —— */
-router.get('/theme-pricing', async (_req: AuthRequest, res: Response) => {
+router.get('/theme-pricing', async (req: AuthRequest, res: Response) => {
   try {
     await ensureProCatalog();
     const themes = await ThemePackPricing.find().sort({ sortOrder: 1 });
-    res.json({ themes });
+    const region =
+      typeof req.query.region === 'string' ? req.query.region : 'IN';
+    const storePrices = await fetchPlayStorePrices(region);
+    res.json({ themes, storePrices });
   } catch (err) {
     console.error('Admin theme-pricing list error:', err);
     res.status(500).json({ error: 'Could not list theme pricing' });
@@ -1309,16 +1315,12 @@ router.patch(
       const packId = paramStr(req.params.packId);
       const body = req.body as Record<string, unknown>;
       const $set: Record<string, unknown> = {};
+      // Prices come from Play Console only — ignore monthlyPrice/permanentPrice/currency.
       for (const key of [
         'name',
-        'currency',
         'monthlyLabel',
         'permanentLabel',
         'subtitle',
-        'androidMonthlySku',
-        'androidPermanentSku',
-        'iosMonthlySku',
-        'iosPermanentSku',
       ]) {
         if (body[key] !== undefined) $set[key] = body[key];
       }
@@ -1329,12 +1331,6 @@ router.patch(
       }
       if (body.enabled !== undefined) {
         $set.enabled = body.enabled === true || body.enabled === 'true';
-      }
-      if (body.monthlyPrice !== undefined) {
-        $set.monthlyPrice = Number(body.monthlyPrice);
-      }
-      if (body.permanentPrice !== undefined) {
-        $set.permanentPrice = Number(body.permanentPrice);
       }
       if (body.sortOrder !== undefined) {
         $set.sortOrder = Number(body.sortOrder);
