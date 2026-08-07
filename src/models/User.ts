@@ -1,5 +1,8 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
-import { MONTH_KEY_PATTERN, MonthlyBudgetEntry } from '../services/monthlyBudgets';
+import {
+  MONTH_KEY_PATTERN,
+  MonthlyBudgetEntry,
+} from '../services/monthlyBudgets';
 
 export type UserRole = 'user' | 'admin';
 
@@ -8,6 +11,7 @@ export interface IThemePurchase {
   kind: 'monthly' | 'permanent';
   purchasedAt: Date;
   expiresAt: Date | null;
+  provider?: 'google_play' | 'app_store' | 'admin' | 'promo' | 'legacy';
 }
 
 export interface IUserDevice {
@@ -57,8 +61,13 @@ const themePurchaseSchema = new Schema<IThemePurchase>(
     kind: { type: String, enum: ['monthly', 'permanent'], required: true },
     purchasedAt: { type: Date, default: Date.now },
     expiresAt: { type: Date, default: null },
+    provider: {
+      type: String,
+      enum: ['google_play', 'app_store', 'admin', 'promo', 'legacy'],
+      default: 'legacy',
+    },
   },
-  { _id: false },
+  { _id: false }
 );
 
 const userDeviceSchema = new Schema<IUserDevice>(
@@ -68,7 +77,7 @@ const userDeviceSchema = new Schema<IUserDevice>(
     firstSeenAt: { type: Date, default: Date.now },
     lastSeenAt: { type: Date, default: Date.now },
   },
-  { _id: false },
+  { _id: false }
 );
 
 const monthlyBudgetSchema = new Schema<MonthlyBudgetEntry>(
@@ -81,7 +90,7 @@ const monthlyBudgetSchema = new Schema<MonthlyBudgetEntry>(
       validate: Number.isFinite,
     },
   },
-  { _id: false },
+  { _id: false }
 );
 
 const userSchema = new Schema<IUser>(
@@ -97,10 +106,20 @@ const userSchema = new Schema<IUser>(
     },
     passwordHash: { type: String, required: true },
     avatarColor: { type: String, default: '#6366F1' },
-    monthlyBudget: { type: Number, default: 0, min: 0, validate: Number.isFinite },
+    monthlyBudget: {
+      type: Number,
+      default: 0,
+      min: 0,
+      validate: Number.isFinite,
+    },
     monthlyBudgets: { type: [monthlyBudgetSchema], default: [] },
     repeatMonthlyBudget: { type: Boolean, default: false },
-    role: { type: String, enum: ['user', 'admin'], default: 'user', index: true },
+    role: {
+      type: String,
+      enum: ['user', 'admin'],
+      default: 'user',
+      index: true,
+    },
     fcmTokens: { type: [String], default: [] },
     devices: { type: [userDeviceSchema], default: [] },
     notifyPartnerOnMyJointAdd: { type: Boolean, default: true },
@@ -124,7 +143,7 @@ const userSchema = new Schema<IUser>(
     proProvider: { type: String, default: '' },
     themePurchases: { type: [themePurchaseSchema], default: [] },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 export const User = mongoose.model<IUser>('User', userSchema);

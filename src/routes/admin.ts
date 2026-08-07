@@ -23,7 +23,11 @@ import {
   fetchRelatedCategorySvg,
   unlinkCategoryIcon,
 } from '../services/categoryIcons';
-import { sendPushToUser, sendPushToUsers, isPushConfigured } from '../services/push';
+import {
+  sendPushToUser,
+  sendPushToUsers,
+  isPushConfigured,
+} from '../services/push';
 import { ProPlan } from '../models/ProPlan';
 import { ThemePackPricing } from '../models/ThemePackPricing';
 import {
@@ -32,6 +36,7 @@ import {
   ensureProCatalog,
   entitlementPayload,
   getProPlanConfig,
+  SHARED_THEME_SKUS,
 } from '../services/proEntitlements';
 import {
   generateOtp,
@@ -51,12 +56,14 @@ function paramStr(value: string | string[] | undefined): string {
 }
 
 function slugify(label: string): string {
-  return label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u0900-\u097F]+/gi, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 40) || 'custom';
+  return (
+    label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\u0900-\u097F]+/gi, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'custom'
+  );
 }
 
 function publicBase(req: AuthRequest): string {
@@ -67,7 +74,10 @@ function publicBase(req: AuthRequest): string {
   return `${proto}://${host}`;
 }
 
-function absoluteIconUrl(req: AuthRequest, iconUrl: string | undefined): string {
+function absoluteIconUrl(
+  req: AuthRequest,
+  iconUrl: string | undefined
+): string {
   if (!iconUrl) return '';
   if (/^https?:\/\//i.test(iconUrl)) return iconUrl;
   if (iconUrl.startsWith('/')) return `${publicBase(req)}${iconUrl}`;
@@ -89,7 +99,9 @@ const categoryIconUpload = multer({
     },
     filename: (_req, file, cb) => {
       const ext = path.extname(file.originalname || '').toLowerCase() || '.png';
-      const safe = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const safe = `${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}${ext}`;
       cb(null, safe);
     },
   }),
@@ -141,7 +153,9 @@ router.get('/stats', async (_req: AuthRequest, res: Response) => {
       PersonalExpense.countDocuments(),
       GroupExpense.countDocuments(),
       Feedback.countDocuments({ status: 'new' }),
-      SupportTicket.countDocuments({ status: { $in: ['open', 'in_progress'] } }),
+      SupportTicket.countDocuments({
+        status: { $in: ['open', 'in_progress'] },
+      }),
       SupportTicket.countDocuments({ unreadByAdmin: true }),
     ]);
 
@@ -171,12 +185,12 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
     const limit = Math.min(200, Number(req.query.limit) || 50);
     const users = await User.find()
       .select(
-        'name email role avatarColor lastActiveAt lastLoginAt lastLoginDeviceId devices mustChangePassword createdAt monthlyBudget repeatMonthlyBudget proPlan proStatus proExpiresAt themePurchases',
+        'name email role avatarColor lastActiveAt lastLoginAt lastLoginDeviceId devices mustChangePassword createdAt monthlyBudget repeatMonthlyBudget proPlan proStatus proExpiresAt themePurchases'
       )
       .sort({ lastActiveAt: -1 })
       .limit(limit);
     res.json({
-      users: users.map(u => ({
+      users: users.map((u) => ({
         id: u.id,
         name: u.name,
         email: u.email,
@@ -186,7 +200,7 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
         lastLoginAt: u.lastLoginAt,
         lastLoginDeviceId: u.lastLoginDeviceId || '',
         deviceCount: (u.devices || []).length,
-        devices: (u.devices || []).slice(0, 5).map(d => ({
+        devices: (u.devices || []).slice(0, 5).map((d) => ({
           deviceId: d.deviceId,
           platform: d.platform,
           lastSeenAt: d.lastSeenAt,
@@ -238,18 +252,18 @@ router.post('/intents', async (req: AuthRequest, res: Response) => {
     const intent = await AssistantIntent.create({
       key: cleanKey,
       name: name.trim(),
-      patterns: (patterns || []).map(p => p.trim()).filter(Boolean),
-      templates: (templates || []).map(t => t.trim()).filter(Boolean),
-      chips: (chips || []).map(c => c.trim()).filter(Boolean),
+      patterns: (patterns || []).map((p) => p.trim()).filter(Boolean),
+      templates: (templates || []).map((t) => t.trim()).filter(Boolean),
+      chips: (chips || []).map((c) => c.trim()).filter(Boolean),
       active: active !== false,
     });
     await logLearning(
-      (intent.patterns || []).map(pattern => ({
+      (intent.patterns || []).map((pattern) => ({
         intentKey: intent.key,
         intentName: intent.name,
         pattern,
         source: 'admin' as const,
-      })),
+      }))
     );
     res.status(201).json({ intent });
   } catch (err) {
@@ -260,7 +274,9 @@ router.post('/intents', async (req: AuthRequest, res: Response) => {
 
 router.patch('/intents/:key', async (req: AuthRequest, res: Response) => {
   try {
-    const intent = await AssistantIntent.findOne({ key: paramStr(req.params.key) });
+    const intent = await AssistantIntent.findOne({
+      key: paramStr(req.params.key),
+    });
     if (!intent) {
       res.status(404).json({ error: 'Intent not found' });
       return;
@@ -273,22 +289,29 @@ router.patch('/intents/:key', async (req: AuthRequest, res: Response) => {
       active?: boolean;
     };
     if (name !== undefined) intent.name = name.trim();
-    const beforePatterns = new Set((intent.patterns || []).map(p => p.toLowerCase()));
-    if (patterns !== undefined) intent.patterns = patterns.map(p => p.trim()).filter(Boolean);
-    if (templates !== undefined) intent.templates = templates.map(t => t.trim()).filter(Boolean);
-    if (chips !== undefined) intent.chips = chips.map(c => c.trim()).filter(Boolean);
+    const beforePatterns = new Set(
+      (intent.patterns || []).map((p) => p.toLowerCase())
+    );
+    if (patterns !== undefined)
+      intent.patterns = patterns.map((p) => p.trim()).filter(Boolean);
+    if (templates !== undefined)
+      intent.templates = templates.map((t) => t.trim()).filter(Boolean);
+    if (chips !== undefined)
+      intent.chips = chips.map((c) => c.trim()).filter(Boolean);
     if (active !== undefined) intent.active = active;
     await intent.save();
 
     if (patterns !== undefined) {
-      const added = intent.patterns.filter(p => !beforePatterns.has(p.toLowerCase()));
+      const added = intent.patterns.filter(
+        (p) => !beforePatterns.has(p.toLowerCase())
+      );
       await logLearning(
-        added.map(pattern => ({
+        added.map((pattern) => ({
           intentKey: intent.key,
           intentName: intent.name,
           pattern,
           source: 'admin' as const,
-        })),
+        }))
       );
     }
 
@@ -301,7 +324,9 @@ router.patch('/intents/:key', async (req: AuthRequest, res: Response) => {
 
 router.delete('/intents/:key', async (req: AuthRequest, res: Response) => {
   try {
-    const deleted = await AssistantIntent.findOneAndDelete({ key: paramStr(req.params.key) });
+    const deleted = await AssistantIntent.findOneAndDelete({
+      key: paramStr(req.params.key),
+    });
     if (!deleted) {
       res.status(404).json({ error: 'Intent not found' });
       return;
@@ -317,7 +342,9 @@ router.delete('/intents/:key', async (req: AuthRequest, res: Response) => {
 router.get('/misses', async (req: AuthRequest, res: Response) => {
   try {
     const limit = Math.min(200, Number(req.query.limit) || 50);
-    const misses = await AssistantMiss.find().sort({ createdAt: -1 }).limit(limit);
+    const misses = await AssistantMiss.find()
+      .sort({ createdAt: -1 })
+      .limit(limit);
     res.json({ misses });
   } catch (err) {
     console.error('Admin misses error:', err);
@@ -333,7 +360,14 @@ router.get('/learning', async (req: AuthRequest, res: Response) => {
     const filter: Record<string, unknown> = {};
     if (
       source &&
-      ['gemini', 'groq', 'huggingface', 'admin', 'system', 'chip_click'].includes(source)
+      [
+        'gemini',
+        'groq',
+        'huggingface',
+        'admin',
+        'system',
+        'chip_click',
+      ].includes(source)
     ) {
       filter.source = source;
     }
@@ -371,7 +405,9 @@ router.get('/qa-patterns', async (req: AuthRequest, res: Response) => {
     const filter: Record<string, unknown> = {};
     if (activeOnly) filter.active = true;
     const [patterns, total, active] = await Promise.all([
-      AssistantQaPattern.find(filter).sort({ hits: -1, weight: -1 }).limit(limit),
+      AssistantQaPattern.find(filter)
+        .sort({ hits: -1, weight: -1 })
+        .limit(limit),
       AssistantQaPattern.countDocuments(),
       AssistantQaPattern.countDocuments({ active: true }),
     ]);
@@ -389,7 +425,10 @@ router.patch('/qa-patterns/:id', async (req: AuthRequest, res: Response) => {
       res.status(400).json({ error: 'Invalid id' });
       return;
     }
-    const { active, styleHint } = req.body as { active?: boolean; styleHint?: string };
+    const { active, styleHint } = req.body as {
+      active?: boolean;
+      styleHint?: string;
+    };
     const update: Record<string, unknown> = {};
     if (typeof active === 'boolean') update.active = active;
     if (typeof styleHint === 'string' && styleHint.trim()) {
@@ -400,7 +439,9 @@ router.patch('/qa-patterns/:id', async (req: AuthRequest, res: Response) => {
       res.status(400).json({ error: 'Nothing to update' });
       return;
     }
-    const pattern = await AssistantQaPattern.findByIdAndUpdate(id, update, { new: true });
+    const pattern = await AssistantQaPattern.findByIdAndUpdate(id, update, {
+      new: true,
+    });
     if (!pattern) {
       res.status(404).json({ error: 'Not found' });
       return;
@@ -456,7 +497,7 @@ router.post('/misses/:id/promote', async (req: AuthRequest, res: Response) => {
 router.get('/categories', async (req: AuthRequest, res: Response) => {
   try {
     const categories = await GlobalCategory.find().sort({ label: 1 });
-    res.json({ categories: categories.map(c => serializeCategory(req, c)) });
+    res.json({ categories: categories.map((c) => serializeCategory(req, c)) });
   } catch (err) {
     console.error('Admin categories error:', err);
     res.status(500).json({ error: 'Could not list categories' });
@@ -465,15 +506,16 @@ router.get('/categories', async (req: AuthRequest, res: Response) => {
 
 router.post('/categories', async (req: AuthRequest, res: Response) => {
   try {
-    const { label, labelHi, emoji, color, synonyms, slug, iconUrl } = req.body as {
-      label?: string;
-      labelHi?: string;
-      emoji?: string;
-      color?: string;
-      synonyms?: string[];
-      slug?: string;
-      iconUrl?: string;
-    };
+    const { label, labelHi, emoji, color, synonyms, slug, iconUrl } =
+      req.body as {
+        label?: string;
+        labelHi?: string;
+        emoji?: string;
+        color?: string;
+        synonyms?: string[];
+        slug?: string;
+        iconUrl?: string;
+      };
     if (!label?.trim()) {
       res.status(400).json({ error: 'label required' });
       return;
@@ -491,7 +533,7 @@ router.post('/categories', async (req: AuthRequest, res: Response) => {
       emoji: emoji || '📦',
       iconUrl: typeof iconUrl === 'string' ? iconUrl.trim() : '',
       color: color || '#94A3B8',
-      synonyms: (synonyms || []).map(s => s.trim()).filter(Boolean),
+      synonyms: (synonyms || []).map((s) => s.trim()).filter(Boolean),
       active: true,
       source: 'admin',
     });
@@ -504,25 +546,29 @@ router.post('/categories', async (req: AuthRequest, res: Response) => {
 
 router.patch('/categories/:slug', async (req: AuthRequest, res: Response) => {
   try {
-    const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
+    const category = await GlobalCategory.findOne({
+      slug: paramStr(req.params.slug),
+    });
     if (!category) {
       res.status(404).json({ error: 'Category not found' });
       return;
     }
-    const { label, labelHi, emoji, color, synonyms, active, iconUrl } = req.body as {
-      label?: string;
-      labelHi?: string;
-      emoji?: string;
-      color?: string;
-      synonyms?: string[];
-      active?: boolean;
-      iconUrl?: string;
-    };
+    const { label, labelHi, emoji, color, synonyms, active, iconUrl } =
+      req.body as {
+        label?: string;
+        labelHi?: string;
+        emoji?: string;
+        color?: string;
+        synonyms?: string[];
+        active?: boolean;
+        iconUrl?: string;
+      };
     if (label !== undefined) category.label = label.trim();
     if (labelHi !== undefined) category.labelHi = labelHi.trim();
     if (emoji !== undefined) category.emoji = emoji;
     if (color !== undefined) category.color = color;
-    if (synonyms !== undefined) category.synonyms = synonyms.map(s => s.trim()).filter(Boolean);
+    if (synonyms !== undefined)
+      category.synonyms = synonyms.map((s) => s.trim()).filter(Boolean);
     if (active !== undefined) category.active = active;
     if (iconUrl !== undefined) {
       if (!iconUrl && category.iconUrl) unlinkCategoryIcon(category.iconUrl);
@@ -539,7 +585,7 @@ router.patch('/categories/:slug', async (req: AuthRequest, res: Response) => {
 router.post(
   '/categories/:slug/icon',
   (req, res, next) => {
-    categoryIconUpload.single('icon')(req, res, err => {
+    categoryIconUpload.single('icon')(req, res, (err) => {
       if (err) {
         res.status(400).json({ error: err.message || 'Upload failed' });
         return;
@@ -549,14 +595,18 @@ router.post(
   },
   async (req: AuthRequest, res: Response) => {
     try {
-      const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
+      const category = await GlobalCategory.findOne({
+        slug: paramStr(req.params.slug),
+      });
       if (!category) {
         res.status(404).json({ error: 'Category not found' });
         return;
       }
       const file = (req as any).file as Express.Multer.File | undefined;
       if (!file) {
-        res.status(400).json({ error: 'No icon file uploaded (field name: icon)' });
+        res
+          .status(400)
+          .json({ error: 'No icon file uploaded (field name: icon)' });
         return;
       }
       unlinkCategoryIcon(category.iconUrl);
@@ -568,103 +618,136 @@ router.post(
       console.error('Admin category icon upload error:', err);
       res.status(500).json({ error: 'Could not upload icon' });
     }
-  },
+  }
 );
 
 /** Fetch a related SVG from Iconify (or download a direct image URL).
  *  Re-fetch skips already-shown icons so each click cycles to a new option.
  */
-router.post('/categories/:slug/fetch-icon', async (req: AuthRequest, res: Response) => {
-  try {
-    const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
-    if (!category) {
-      res.status(404).json({ error: 'Category not found' });
-      return;
-    }
-    const query =
-      (typeof req.body?.query === 'string' && req.body.query.trim()) ||
-      category.label ||
-      category.slug;
-    const directUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
-
-    const tried = Array.isArray(category.iconTriedKeys) ? [...category.iconTriedKeys] : [];
-    if (category.iconSourceKey && !tried.includes(category.iconSourceKey)) {
-      tried.push(category.iconSourceKey);
-    }
-
-    let downloaded = directUrl
-      ? await downloadCategoryIconFromUrl(directUrl)
-      : await fetchRelatedCategorySvg(query, { exclude: tried });
-
-    if (!downloaded && !directUrl) {
-      // fallback: try slug words
-      downloaded = await fetchRelatedCategorySvg(category.slug.replace(/_/g, ' '), {
-        exclude: tried,
+router.post(
+  '/categories/:slug/fetch-icon',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const category = await GlobalCategory.findOne({
+        slug: paramStr(req.params.slug),
       });
-    }
+      if (!category) {
+        res.status(404).json({ error: 'Category not found' });
+        return;
+      }
+      const query =
+        (typeof req.body?.query === 'string' && req.body.query.trim()) ||
+        category.label ||
+        category.slug;
+      const directUrl =
+        typeof req.body?.url === 'string' ? req.body.url.trim() : '';
 
-    if (!downloaded) {
-      res.status(502).json({
-        error: directUrl
-          ? 'Could not download that image URL'
-          : `No related SVG found for “${query}” — try a different search word`,
+      const tried = Array.isArray(category.iconTriedKeys)
+        ? [...category.iconTriedKeys]
+        : [];
+      if (category.iconSourceKey && !tried.includes(category.iconSourceKey)) {
+        tried.push(category.iconSourceKey);
+      }
+
+      let downloaded = directUrl
+        ? await downloadCategoryIconFromUrl(directUrl)
+        : await fetchRelatedCategorySvg(query, { exclude: tried });
+
+      if (!downloaded && !directUrl) {
+        // fallback: try slug words
+        downloaded = await fetchRelatedCategorySvg(
+          category.slug.replace(/_/g, ' '),
+          {
+            exclude: tried,
+          }
+        );
+      }
+
+      if (!downloaded) {
+        res.status(502).json({
+          error: directUrl
+            ? 'Could not download that image URL'
+            : `No related SVG found for “${query}” — try a different search word`,
+        });
+        return;
+      }
+
+      const dir = categoryUploadDir();
+      fs.writeFileSync(path.join(dir, downloaded.fileName), downloaded.buffer);
+      unlinkCategoryIcon(category.iconUrl);
+      category.iconUrl = `/uploads/categories/${downloaded.fileName}`;
+
+      if (downloaded.iconKey) {
+        const nextTried = [...tried, downloaded.iconKey];
+        // Keep list bounded; if huge, trim oldest so cycle can restart fresh later
+        category.iconTriedKeys = nextTried.slice(-40);
+        category.iconSourceKey = downloaded.iconKey;
+      } else {
+        category.iconSourceKey = '';
+      }
+
+      await category.save();
+      res.json({
+        category: serializeCategory(req, category),
+        iconKey: downloaded.iconKey || null,
       });
-      return;
+    } catch (err) {
+      console.error('Admin category fetch-icon error:', err);
+      res.status(500).json({ error: 'Could not fetch icon' });
     }
+  }
+);
 
-    const dir = categoryUploadDir();
-    fs.writeFileSync(path.join(dir, downloaded.fileName), downloaded.buffer);
-    unlinkCategoryIcon(category.iconUrl);
-    category.iconUrl = `/uploads/categories/${downloaded.fileName}`;
-
-    if (downloaded.iconKey) {
-      const nextTried = [...tried, downloaded.iconKey];
-      // Keep list bounded; if huge, trim oldest so cycle can restart fresh later
-      category.iconTriedKeys = nextTried.slice(-40);
-      category.iconSourceKey = downloaded.iconKey;
-    } else {
+router.delete(
+  '/categories/:slug/icon',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const category = await GlobalCategory.findOne({
+        slug: paramStr(req.params.slug),
+      });
+      if (!category) {
+        res.status(404).json({ error: 'Category not found' });
+        return;
+      }
+      unlinkCategoryIcon(category.iconUrl);
+      category.iconUrl = '';
       category.iconSourceKey = '';
+      category.iconTriedKeys = [];
+      await category.save();
+      res.json({ category: serializeCategory(req, category) });
+    } catch (err) {
+      console.error('Admin category clear icon error:', err);
+      res.status(500).json({ error: 'Could not clear icon' });
     }
-
-    await category.save();
-    res.json({
-      category: serializeCategory(req, category),
-      iconKey: downloaded.iconKey || null,
-    });
-  } catch (err) {
-    console.error('Admin category fetch-icon error:', err);
-    res.status(500).json({ error: 'Could not fetch icon' });
   }
-});
-
-router.delete('/categories/:slug/icon', async (req: AuthRequest, res: Response) => {
-  try {
-    const category = await GlobalCategory.findOne({ slug: paramStr(req.params.slug) });
-    if (!category) {
-      res.status(404).json({ error: 'Category not found' });
-      return;
-    }
-    unlinkCategoryIcon(category.iconUrl);
-    category.iconUrl = '';
-    category.iconSourceKey = '';
-    category.iconTriedKeys = [];
-    await category.save();
-    res.json({ category: serializeCategory(req, category) });
-  } catch (err) {
-    console.error('Admin category clear icon error:', err);
-    res.status(500).json({ error: 'Could not clear icon' });
-  }
-});
+);
 
 router.delete('/categories/:slug', async (req: AuthRequest, res: Response) => {
   try {
     const slug = paramStr(req.params.slug);
-    if (['food', 'groceries', 'shopping', 'transport', 'entertainment', 'bills', 'rent', 'taxes', 'gifts', 'donation', 'insurance', 'personal_care', 'health', 'other'].includes(slug)) {
+    if (
+      [
+        'food',
+        'groceries',
+        'shopping',
+        'transport',
+        'entertainment',
+        'bills',
+        'rent',
+        'taxes',
+        'gifts',
+        'donation',
+        'insurance',
+        'personal_care',
+        'health',
+        'other',
+      ].includes(slug)
+    ) {
       // Soft-disable built-ins instead of delete
       const category = await GlobalCategory.findOneAndUpdate(
         { slug },
         { active: false },
-        { new: true },
+        { new: true }
       );
       res.json({
         category: category ? serializeCategory(req, category) : category,
@@ -689,115 +772,132 @@ router.delete('/categories/:slug', async (req: AuthRequest, res: Response) => {
  * Suggestions: user-created categories that look useful to promote globally.
  * Groups by slug/label, counts distinct users.
  */
-router.get('/category-suggestions', async (_req: AuthRequest, res: Response) => {
-  try {
-    const globalSlugs = new Set(
-      (await GlobalCategory.find({ active: true }).select('slug')).map(c => c.slug),
-    );
+router.get(
+  '/category-suggestions',
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const globalSlugs = new Set(
+        (await GlobalCategory.find({ active: true }).select('slug')).map(
+          (c) => c.slug
+        )
+      );
 
-    const grouped = await UserCategory.aggregate<{
-      _id: string;
-      label: string;
-      emoji: string;
-      color: string;
-      users: number;
-      useCount: number;
-      sampleUserIds: Types.ObjectId[];
-    }>([
-      { $match: { active: true } },
-      {
-        $group: {
-          _id: '$slug',
-          label: { $first: '$label' },
-          emoji: { $first: '$emoji' },
-          color: { $first: '$color' },
-          users: { $addToSet: '$user' },
-          useCount: { $sum: '$useCount' },
+      const grouped = await UserCategory.aggregate<{
+        _id: string;
+        label: string;
+        emoji: string;
+        color: string;
+        users: number;
+        useCount: number;
+        sampleUserIds: Types.ObjectId[];
+      }>([
+        { $match: { active: true } },
+        {
+          $group: {
+            _id: '$slug',
+            label: { $first: '$label' },
+            emoji: { $first: '$emoji' },
+            color: { $first: '$color' },
+            users: { $addToSet: '$user' },
+            useCount: { $sum: '$useCount' },
+          },
         },
-      },
-      {
-        $project: {
-          label: 1,
-          emoji: 1,
-          color: 1,
-          useCount: 1,
-          users: { $size: '$users' },
-          sampleUserIds: { $slice: ['$users', 5] },
+        {
+          $project: {
+            label: 1,
+            emoji: 1,
+            color: 1,
+            useCount: 1,
+            users: { $size: '$users' },
+            sampleUserIds: { $slice: ['$users', 5] },
+          },
         },
-      },
-      { $sort: { users: -1, useCount: -1 } },
-      { $limit: 100 },
-    ]);
+        { $sort: { users: -1, useCount: -1 } },
+        { $limit: 100 },
+      ]);
 
-    const suggestions = grouped
-      .filter(g => !globalSlugs.has(g._id))
-      .map(g => ({
-        slug: g._id,
-        label: g.label,
-        emoji: g.emoji,
-        color: g.color,
-        userCount: g.users,
-        useCount: g.useCount,
-        alreadyGlobal: false,
-        reason:
-          g.users >= 2
-            ? `${g.users} users added a similar category — good candidate to add globally`
-            : 'One user created this — review before promoting',
-      }));
+      const suggestions = grouped
+        .filter((g) => !globalSlugs.has(g._id))
+        .map((g) => ({
+          slug: g._id,
+          label: g.label,
+          emoji: g.emoji,
+          color: g.color,
+          userCount: g.users,
+          useCount: g.useCount,
+          alreadyGlobal: false,
+          reason:
+            g.users >= 2
+              ? `${g.users} users added a similar category — good candidate to add globally`
+              : 'One user created this — review before promoting',
+        }));
 
-    res.json({ suggestions });
-  } catch (err) {
-    console.error('Admin category suggestions error:', err);
-    res.status(500).json({ error: 'Could not load suggestions' });
+      res.json({ suggestions });
+    } catch (err) {
+      console.error('Admin category suggestions error:', err);
+      res.status(500).json({ error: 'Could not load suggestions' });
+    }
   }
-});
+);
 
 /** Promote a user suggestion into global categories */
-router.post('/category-suggestions/:slug/promote', async (req: AuthRequest, res: Response) => {
-  try {
-    const slug = paramStr(req.params.slug).toLowerCase();
-    const sample = await UserCategory.findOne({ slug, active: true });
-    if (!sample) {
-      res.status(404).json({ error: 'No user category with this slug' });
-      return;
+router.post(
+  '/category-suggestions/:slug/promote',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const slug = paramStr(req.params.slug).toLowerCase();
+      const sample = await UserCategory.findOne({ slug, active: true });
+      if (!sample) {
+        res.status(404).json({ error: 'No user category with this slug' });
+        return;
+      }
+      const existing = await GlobalCategory.findOne({ slug });
+      if (existing) {
+        existing.active = true;
+        existing.source = 'promoted';
+        await existing.save();
+        res.json({
+          category: existing,
+          message: 'Re-activated existing global category',
+        });
+        return;
+      }
+      const category = await GlobalCategory.create({
+        slug,
+        label: sample.label,
+        emoji: sample.emoji,
+        color: sample.color,
+        synonyms: [sample.label.toLowerCase()],
+        active: true,
+        source: 'promoted',
+      });
+      res.status(201).json({
+        category,
+        message: 'Promoted to global — all users can use it',
+      });
+    } catch (err) {
+      console.error('Admin promote category error:', err);
+      res.status(500).json({ error: 'Could not promote category' });
     }
-    const existing = await GlobalCategory.findOne({ slug });
-    if (existing) {
-      existing.active = true;
-      existing.source = 'promoted';
-      await existing.save();
-      res.json({ category: existing, message: 'Re-activated existing global category' });
-      return;
-    }
-    const category = await GlobalCategory.create({
-      slug,
-      label: sample.label,
-      emoji: sample.emoji,
-      color: sample.color,
-      synonyms: [sample.label.toLowerCase()],
-      active: true,
-      source: 'promoted',
-    });
-    res.status(201).json({ category, message: 'Promoted to global — all users can use it' });
-  } catch (err) {
-    console.error('Admin promote category error:', err);
-    res.status(500).json({ error: 'Could not promote category' });
   }
-});
+);
 
 /** Self-learned / seeded keyword → category mappings */
 router.get('/category-terms', async (_req: AuthRequest, res: Response) => {
   try {
     const terms = await listCategoryTermsForAdmin(150);
     res.json({
-      terms: terms.map(t => ({
+      terms: terms.map((t) => ({
         term: t.term,
         category: t.category,
         weight: t.weight,
         source: t.source,
         active: t.active,
         conflict: t.conflict,
-        votes: (t.votes || []).map(v => ({ category: v.category, count: v.count })),
+        votes: (t.votes || []).map((v) => ({
+          category: v.category,
+          count: v.count,
+        })),
       })),
     });
   } catch (err) {
@@ -825,7 +925,7 @@ router.get('/feedback', async (req: AuthRequest, res: Response) => {
       .limit(limit);
 
     res.json({
-      feedback: items.map(d => {
+      feedback: items.map((d) => {
         const u = d.user as any;
         return {
           id: d.id,
@@ -891,7 +991,10 @@ router.get('/support/tickets', async (req: AuthRequest, res: Response) => {
     const unread = String(req.query.unread || '').trim();
     const limit = Math.min(200, Number(req.query.limit) || 80);
     const filter: Record<string, unknown> = {};
-    if (status && ['open', 'in_progress', 'resolved', 'closed'].includes(status)) {
+    if (
+      status &&
+      ['open', 'in_progress', 'resolved', 'closed'].includes(status)
+    ) {
       filter.status = status;
     }
     if (unread === '1' || unread === 'true') {
@@ -902,11 +1005,13 @@ router.get('/support/tickets', async (req: AuthRequest, res: Response) => {
       .sort({ unreadByAdmin: -1, lastMessageAt: -1, updatedAt: -1 })
       .limit(limit);
 
-    const unreadCount = await SupportTicket.countDocuments({ unreadByAdmin: true });
+    const unreadCount = await SupportTicket.countDocuments({
+      unreadByAdmin: true,
+    });
 
     res.json({
       unreadCount,
-      tickets: items.map(d => serializeAdminTicket(d)),
+      tickets: items.map((d) => serializeAdminTicket(d)),
     });
   } catch (err) {
     console.error('Admin tickets list error:', err);
@@ -936,108 +1041,114 @@ function serializeAdminTicket(doc: InstanceType<typeof SupportTicket>) {
     unreadByAdmin: !!unreadByAdmin,
     lastMessageAt: doc.lastMessageAt || doc.updatedAt,
     lastMessageRole: doc.lastMessageRole || lastReply?.role || 'user',
-    lastMessagePreview: doc.lastMessagePreview || (lastReply?.message || doc.body || '').slice(0, 140),
+    lastMessagePreview:
+      doc.lastMessagePreview ||
+      (lastReply?.message || doc.body || '').slice(0, 140),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
     resolvedAt: doc.resolvedAt || null,
-    user: u?._id || u?.id
-      ? { id: String(u._id || u.id), name: u.name, email: u.email }
-      : null,
+    user:
+      u?._id || u?.id
+        ? { id: String(u._id || u.id), name: u.name, email: u.email }
+        : null,
   };
 }
 
-router.patch('/support/tickets/:id', async (req: AuthRequest, res: Response) => {
-  try {
-    const id = paramStr(req.params.id);
-    if (!Types.ObjectId.isValid(id)) {
-      res.status(400).json({ error: 'Invalid id' });
-      return;
-    }
-    const doc = await SupportTicket.findById(id);
-    if (!doc) {
-      res.status(404).json({ error: 'Ticket not found' });
-      return;
-    }
-
-    if (req.body?.status !== undefined) {
-      const s = String(req.body.status);
-      if (!['open', 'in_progress', 'resolved', 'closed'].includes(s)) {
-        res.status(400).json({ error: 'Invalid status' });
+router.patch(
+  '/support/tickets/:id',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = paramStr(req.params.id);
+      if (!Types.ObjectId.isValid(id)) {
+        res.status(400).json({ error: 'Invalid id' });
         return;
       }
-      doc.status = s as any;
-      if (s === 'resolved' || s === 'closed') {
-        doc.resolvedAt = doc.resolvedAt || new Date();
-      } else {
-        doc.resolvedAt = undefined;
+      const doc = await SupportTicket.findById(id);
+      if (!doc) {
+        res.status(404).json({ error: 'Ticket not found' });
+        return;
       }
-    }
-    if (req.body?.adminNote !== undefined) {
-      doc.adminNote = String(req.body.adminNote).slice(0, 2000);
-    }
 
-    // Explicit read / unread toggles for admin inbox
-    if (req.body?.markRead === true || req.body?.unreadByAdmin === false) {
-      doc.unreadByAdmin = false;
-    }
-    if (req.body?.markUnread === true || req.body?.unreadByAdmin === true) {
-      doc.unreadByAdmin = true;
-    }
+      if (req.body?.status !== undefined) {
+        const s = String(req.body.status);
+        if (!['open', 'in_progress', 'resolved', 'closed'].includes(s)) {
+          res.status(400).json({ error: 'Invalid status' });
+          return;
+        }
+        doc.status = s as any;
+        if (s === 'resolved' || s === 'closed') {
+          doc.resolvedAt = doc.resolvedAt || new Date();
+        } else {
+          doc.resolvedAt = undefined;
+        }
+      }
+      if (req.body?.adminNote !== undefined) {
+        doc.adminNote = String(req.body.adminNote).slice(0, 2000);
+      }
 
-    if (req.body?.reply) {
-      const message = String(req.body.reply).trim();
-      if (message.length >= 2 && message.length <= 4000) {
-        const admin = await User.findById(req.user!.userId).select('name');
-        const now = new Date();
-        doc.replies.push({
-          role: 'admin',
-          message,
-          authorName: admin?.name || 'Support',
-          createdAt: now,
-        });
-        doc.unreadByUser = true;
+      // Explicit read / unread toggles for admin inbox
+      if (req.body?.markRead === true || req.body?.unreadByAdmin === false) {
         doc.unreadByAdmin = false;
-        doc.lastMessageAt = now;
-        doc.lastMessageRole = 'admin';
-        doc.lastMessagePreview =
-          message.length > 140 ? `${message.slice(0, 140)}…` : message;
-        if (doc.status === 'open') doc.status = 'in_progress';
       }
-    }
-
-    await doc.save();
-    await doc.populate('user', 'name email');
-
-    let pushSent = 0;
-    // Push to the ticket owner when support replies
-    if (req.body?.reply && String(req.body.reply).trim().length >= 2) {
-      const ownerId = String((doc.user as any)?._id || doc.user || '');
-      const preview = String(req.body.reply).trim().slice(0, 120);
-      try {
-        pushSent = await sendPushToUser(ownerId, {
-          title: 'Support replied',
-          body: preview || `New reply on ${ticketCode(doc.id)}`,
-          data: {
-            type: 'support_reply',
-            ticketId: doc.id,
-            code: ticketCode(doc.id),
-          },
-        });
-      } catch (err) {
-        console.warn('Push notify failed:', err);
+      if (req.body?.markUnread === true || req.body?.unreadByAdmin === true) {
+        doc.unreadByAdmin = true;
       }
-    }
 
-    res.json({
-      ticket: serializeAdminTicket(doc),
-      pushSent,
-      pushConfigured: isPushConfigured(),
-    });
-  } catch (err) {
-    console.error('Admin ticket patch error:', err);
-    res.status(500).json({ error: 'Could not update ticket' });
+      if (req.body?.reply) {
+        const message = String(req.body.reply).trim();
+        if (message.length >= 2 && message.length <= 4000) {
+          const admin = await User.findById(req.user!.userId).select('name');
+          const now = new Date();
+          doc.replies.push({
+            role: 'admin',
+            message,
+            authorName: admin?.name || 'Support',
+            createdAt: now,
+          });
+          doc.unreadByUser = true;
+          doc.unreadByAdmin = false;
+          doc.lastMessageAt = now;
+          doc.lastMessageRole = 'admin';
+          doc.lastMessagePreview =
+            message.length > 140 ? `${message.slice(0, 140)}…` : message;
+          if (doc.status === 'open') doc.status = 'in_progress';
+        }
+      }
+
+      await doc.save();
+      await doc.populate('user', 'name email');
+
+      let pushSent = 0;
+      // Push to the ticket owner when support replies
+      if (req.body?.reply && String(req.body.reply).trim().length >= 2) {
+        const ownerId = String((doc.user as any)?._id || doc.user || '');
+        const preview = String(req.body.reply).trim().slice(0, 120);
+        try {
+          pushSent = await sendPushToUser(ownerId, {
+            title: 'Support replied',
+            body: preview || `New reply on ${ticketCode(doc.id)}`,
+            data: {
+              type: 'support_reply',
+              ticketId: doc.id,
+              code: ticketCode(doc.id),
+            },
+          });
+        } catch (err) {
+          console.warn('Push notify failed:', err);
+        }
+      }
+
+      res.json({
+        ticket: serializeAdminTicket(doc),
+        pushSent,
+        pushConfigured: isPushConfigured(),
+      });
+    } catch (err) {
+      console.error('Admin ticket patch error:', err);
+      res.status(500).json({ error: 'Could not update ticket' });
+    }
   }
-});
+);
 
 /** Manual / broadcast push from admin panel */
 router.post('/notifications', async (req: AuthRequest, res: Response) => {
@@ -1071,7 +1182,7 @@ router.post('/notifications', async (req: AuthRequest, res: Response) => {
       })
         .select('_id')
         .limit(2000);
-      userIds = users.map(u => u.id);
+      userIds = users.map((u) => u.id);
     } else if (target === 'users') {
       const raw = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
       userIds = raw.map((id: unknown) => String(id)).filter(Boolean);
@@ -1103,31 +1214,34 @@ router.post('/notifications', async (req: AuthRequest, res: Response) => {
   }
 });
 
-router.get('/notifications/status', async (_req: AuthRequest, res: Response) => {
-  try {
-    const withTokens = await User.countDocuments({
-      'fcmTokens.0': { $exists: true },
-    });
-    const sample = await User.find({ 'fcmTokens.0': { $exists: true } })
-      .select('name email role fcmTokens')
-      .limit(20)
-      .lean();
-    res.json({
-      configured: isPushConfigured(),
-      usersWithDevices: withTokens,
-      devices: sample.map(u => ({
-        id: String(u._id),
-        name: u.name,
-        email: u.email,
-        role: u.role || 'user',
-        tokenCount: Array.isArray(u.fcmTokens) ? u.fcmTokens.length : 0,
-      })),
-    });
-  } catch (err) {
-    console.error('Admin notification status error:', err);
-    res.status(500).json({ error: 'Could not load status' });
+router.get(
+  '/notifications/status',
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const withTokens = await User.countDocuments({
+        'fcmTokens.0': { $exists: true },
+      });
+      const sample = await User.find({ 'fcmTokens.0': { $exists: true } })
+        .select('name email role fcmTokens')
+        .limit(20)
+        .lean();
+      res.json({
+        configured: isPushConfigured(),
+        usersWithDevices: withTokens,
+        devices: sample.map((u) => ({
+          id: String(u._id),
+          name: u.name,
+          email: u.email,
+          role: u.role || 'user',
+          tokenCount: Array.isArray(u.fcmTokens) ? u.fcmTokens.length : 0,
+        })),
+      });
+    } catch (err) {
+      console.error('Admin notification status error:', err);
+      res.status(500).json({ error: 'Could not load status' });
+    }
   }
-});
+);
 
 /** —— Pro plan config —— */
 router.get('/pro-plan', async (_req: AuthRequest, res: Response) => {
@@ -1167,7 +1281,7 @@ router.patch('/pro-plan', async (req: AuthRequest, res: Response) => {
     const plan = await ProPlan.findOneAndUpdate(
       { key: 'default' },
       { $set },
-      { new: true },
+      { new: true }
     );
     res.json({ plan });
   } catch (err) {
@@ -1188,36 +1302,64 @@ router.get('/theme-pricing', async (_req: AuthRequest, res: Response) => {
   }
 });
 
-router.patch('/theme-pricing/:packId', async (req: AuthRequest, res: Response) => {
-  try {
-    const packId = paramStr(req.params.packId);
-    const body = req.body as Record<string, unknown>;
-    const $set: Record<string, unknown> = {};
-    for (const key of [
-      'name',
-      'monthlyPrice',
-      'permanentPrice',
-      'currency',
-      'enabled',
-      'sortOrder',
-    ]) {
-      if (body[key] !== undefined) $set[key] = body[key];
+router.patch(
+  '/theme-pricing/:packId',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const packId = paramStr(req.params.packId);
+      const body = req.body as Record<string, unknown>;
+      const $set: Record<string, unknown> = {};
+      for (const key of [
+        'name',
+        'currency',
+        'monthlyLabel',
+        'permanentLabel',
+        'subtitle',
+        'androidMonthlySku',
+        'androidPermanentSku',
+        'iosMonthlySku',
+        'iosPermanentSku',
+      ]) {
+        if (body[key] !== undefined) $set[key] = body[key];
+      }
+      // Booleans must be explicit — never leave Free-with-Pro sticky as true.
+      if (body.includedInPro !== undefined) {
+        $set.includedInPro =
+          body.includedInPro === true || body.includedInPro === 'true';
+      }
+      if (body.enabled !== undefined) {
+        $set.enabled = body.enabled === true || body.enabled === 'true';
+      }
+      if (body.monthlyPrice !== undefined) {
+        $set.monthlyPrice = Number(body.monthlyPrice);
+      }
+      if (body.permanentPrice !== undefined) {
+        $set.permanentPrice = Number(body.permanentPrice);
+      }
+      if (body.sortOrder !== undefined) {
+        $set.sortOrder = Number(body.sortOrder);
+      }
+      // Themes share two store products for every pack.
+      $set.androidMonthlySku = SHARED_THEME_SKUS.monthly;
+      $set.androidPermanentSku = SHARED_THEME_SKUS.permanent;
+      $set.iosMonthlySku = SHARED_THEME_SKUS.monthly;
+      $set.iosPermanentSku = SHARED_THEME_SKUS.permanent;
+      const theme = await ThemePackPricing.findOneAndUpdate(
+        { packId },
+        { $set },
+        { new: true, runValidators: true }
+      );
+      if (!theme) {
+        res.status(404).json({ error: 'Theme not found' });
+        return;
+      }
+      res.json({ theme });
+    } catch (err) {
+      console.error('Admin theme-pricing patch error:', err);
+      res.status(500).json({ error: 'Could not update theme pricing' });
     }
-    const theme = await ThemePackPricing.findOneAndUpdate(
-      { packId },
-      { $set },
-      { new: true },
-    );
-    if (!theme) {
-      res.status(404).json({ error: 'Theme not found' });
-      return;
-    }
-    res.json({ theme });
-  } catch (err) {
-    console.error('Admin theme-pricing patch error:', err);
-    res.status(500).json({ error: 'Could not update theme pricing' });
   }
-});
+);
 
 /** Admin grant / revoke Pro for a user */
 router.patch('/users/:id/pro', async (req: AuthRequest, res: Response) => {
@@ -1245,22 +1387,81 @@ router.patch('/users/:id/pro', async (req: AuthRequest, res: Response) => {
       const nDays = Number(days);
       user.proPlan = planKey;
       user.proStatus = 'active';
-      user.proExpiresAt = Number.isFinite(nDays) && nDays > 0
-        ? new Date(now.getTime() + nDays * 86400000)
-        : planKey === 'yearly'
+      user.proExpiresAt =
+        Number.isFinite(nDays) && nDays > 0
+          ? new Date(now.getTime() + nDays * 86400000)
+          : planKey === 'yearly'
           ? addYears(now, 1)
           : addMonths(now, 1);
       user.proProvider = 'admin';
     }
     await user.save();
-    res.json({ user: { id: user.id, email: user.email, pro: entitlementPayload(user) } });
+    res.json({
+      user: { id: user.id, email: user.email, pro: entitlementPayload(user) },
+    });
   } catch (err) {
     console.error('Admin grant pro error:', err);
     res.status(500).json({ error: 'Could not update user Pro' });
   }
 });
 
-function serializeResetAdmin(doc: InstanceType<typeof PasswordResetRequest>, user?: any) {
+/** Admin grant / revoke a theme for one user (offers, support, promotions). */
+router.patch('/users/:id/themes', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = paramStr(req.params.id);
+    const { packId, action, kind, days } = req.body as {
+      packId?: string;
+      action?: 'grant' | 'revoke';
+      kind?: 'monthly' | 'permanent';
+      days?: number;
+    };
+    const pricing = packId
+      ? await ThemePackPricing.findOne({ packId, enabled: true }).lean()
+      : null;
+    if (!pricing) {
+      res.status(404).json({ error: 'Theme not found' });
+      return;
+    }
+    const user = await User.findById(id);
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    user.themePurchases = (user.themePurchases || []).filter(
+      (p) => p.packId !== packId
+    );
+    if (action !== 'revoke') {
+      const grantKind = kind === 'monthly' ? 'monthly' : 'permanent';
+      const nDays = Math.max(1, Math.min(3650, Number(days) || 30));
+      user.themePurchases.push({
+        packId: packId!,
+        kind: grantKind,
+        purchasedAt: new Date(),
+        expiresAt:
+          grantKind === 'monthly'
+            ? new Date(Date.now() + nDays * 86_400_000)
+            : null,
+        provider: 'admin',
+      });
+    }
+    await user.save();
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        pro: entitlementPayload(user),
+      },
+    });
+  } catch (err) {
+    console.error('Admin theme grant error:', err);
+    res.status(500).json({ error: 'Could not update theme access' });
+  }
+});
+
+function serializeResetAdmin(
+  doc: InstanceType<typeof PasswordResetRequest>,
+  user?: any
+) {
   return {
     ...serializeResetForClient(doc),
     deviceId: doc.deviceId,
@@ -1295,7 +1496,12 @@ router.get('/password-resets', async (req: AuthRequest, res: Response) => {
     const filter: Record<string, unknown> = {};
     if (status === 'open') {
       filter.status = {
-        $in: ['pending', 'awaiting_verification', 'verified', 'temp_password_sent'],
+        $in: [
+          'pending',
+          'awaiting_verification',
+          'verified',
+          'temp_password_sent',
+        ],
       };
     } else if (status) {
       filter.status = status;
@@ -1304,7 +1510,10 @@ router.get('/password-resets', async (req: AuthRequest, res: Response) => {
     const rows = await PasswordResetRequest.find(filter)
       .sort({ createdAt: -1 })
       .limit(limit)
-      .populate('user', 'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword');
+      .populate(
+        'user',
+        'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword'
+      );
 
     const pendingCount = await PasswordResetRequest.countDocuments({
       status: { $in: ['pending', 'awaiting_verification', 'verified'] },
@@ -1312,7 +1521,7 @@ router.get('/password-resets', async (req: AuthRequest, res: Response) => {
 
     res.json({
       pendingCount,
-      requests: rows.map(r => serializeResetAdmin(r, r.user)),
+      requests: rows.map((r) => serializeResetAdmin(r, r.user)),
     });
   } catch (err) {
     console.error('Admin password-resets list error:', err);
@@ -1329,7 +1538,7 @@ router.get('/password-resets/:id', async (req: AuthRequest, res: Response) => {
     }
     const doc = await PasswordResetRequest.findById(id).populate(
       'user',
-      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
+      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword'
     );
     if (!doc) {
       res.status(404).json({ error: 'Not found' });
@@ -1342,157 +1551,182 @@ router.get('/password-resets/:id', async (req: AuthRequest, res: Response) => {
   }
 });
 
-router.patch('/password-resets/:id', async (req: AuthRequest, res: Response) => {
-  try {
-    const id = paramStr(req.params.id);
-    const body = req.body as {
-      adminNote?: string;
-      status?: 'rejected' | 'completed';
-      reply?: string;
-    };
-    const doc = await PasswordResetRequest.findById(id).populate(
-      'user',
-      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
-    );
-    if (!doc) {
-      res.status(404).json({ error: 'Not found' });
-      return;
+router.patch(
+  '/password-resets/:id',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = paramStr(req.params.id);
+      const body = req.body as {
+        adminNote?: string;
+        status?: 'rejected' | 'completed';
+        reply?: string;
+      };
+      const doc = await PasswordResetRequest.findById(id).populate(
+        'user',
+        'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword'
+      );
+      if (!doc) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      if (typeof body.adminNote === 'string') {
+        doc.adminNote = body.adminNote.trim().slice(0, 2000);
+      }
+      if (body.status === 'rejected' || body.status === 'completed') {
+        doc.status = body.status;
+        if (body.status === 'completed') doc.completedAt = new Date();
+      }
+      const reply = String(body.reply || '').trim();
+      if (reply) {
+        doc.messages.push({
+          role: 'admin',
+          message: reply.slice(0, 4000),
+          createdAt: new Date(),
+        });
+      }
+      await doc.save();
+      res.json({ request: serializeResetAdmin(doc, doc.user) });
+    } catch (err) {
+      console.error('Admin password-reset patch error:', err);
+      res.status(500).json({ error: 'Could not update request' });
     }
-    if (typeof body.adminNote === 'string') {
-      doc.adminNote = body.adminNote.trim().slice(0, 2000);
-    }
-    if (body.status === 'rejected' || body.status === 'completed') {
-      doc.status = body.status;
-      if (body.status === 'completed') doc.completedAt = new Date();
-    }
-    const reply = String(body.reply || '').trim();
-    if (reply) {
-      doc.messages.push({ role: 'admin', message: reply.slice(0, 4000), createdAt: new Date() });
-    }
-    await doc.save();
-    res.json({ request: serializeResetAdmin(doc, doc.user) });
-  } catch (err) {
-    console.error('Admin password-reset patch error:', err);
-    res.status(500).json({ error: 'Could not update request' });
   }
-});
+);
 
 /** Same-device (or already verified): generate temp password + deliver as message */
-router.post('/password-resets/:id/send-temp-password', async (req: AuthRequest, res: Response) => {
-  try {
-    const id = paramStr(req.params.id);
-    const doc = await PasswordResetRequest.findById(id).populate(
-      'user',
-      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
-    );
-    if (!doc) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    if (['rejected', 'completed'].includes(doc.status)) {
-      res.status(400).json({ error: 'Request is closed' });
-      return;
-    }
-    if (!doc.sameDevice && doc.status !== 'verified' && doc.status !== 'temp_password_sent') {
-      res.status(400).json({
-        error:
-          'New device — send OTP/verification link first. Temp password only after verify (or same device).',
+router.post(
+  '/password-resets/:id/send-temp-password',
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = paramStr(req.params.id);
+      const doc = await PasswordResetRequest.findById(id).populate(
+        'user',
+        'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword'
+      );
+      if (!doc) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      if (['rejected', 'completed'].includes(doc.status)) {
+        res.status(400).json({ error: 'Request is closed' });
+        return;
+      }
+      if (
+        !doc.sameDevice &&
+        doc.status !== 'verified' &&
+        doc.status !== 'temp_password_sent'
+      ) {
+        res.status(400).json({
+          error:
+            'New device — send OTP/verification link first. Temp password only after verify (or same device).',
+        });
+        return;
+      }
+
+      const temp = await issueTempPasswordForRequest(doc);
+      const fresh = await PasswordResetRequest.findById(id).populate(
+        'user',
+        'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword'
+      );
+
+      res.json({
+        request: serializeResetAdmin(fresh!, fresh!.user),
+        tempPassword: temp,
+        message:
+          'Temporary password generated and added to the user message thread.',
       });
-      return;
+    } catch (err) {
+      console.error('Admin send-temp-password error:', err);
+      res.status(500).json({ error: 'Could not send temporary password' });
     }
-
-    const temp = await issueTempPasswordForRequest(doc);
-    const fresh = await PasswordResetRequest.findById(id).populate(
-      'user',
-      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
-    );
-
-    res.json({
-      request: serializeResetAdmin(fresh!, fresh!.user),
-      tempPassword: temp,
-      message: 'Temporary password generated and added to the user message thread.',
-    });
-  } catch (err) {
-    console.error('Admin send-temp-password error:', err);
-    res.status(500).json({ error: 'Could not send temporary password' });
   }
-});
+);
 
 /** New-device: create OTP + optional verification token for admin to share */
-router.post('/password-resets/:id/send-verification', async (req: AuthRequest, res: Response) => {
-  try {
-    const id = paramStr(req.params.id);
-    const mode = String((req.body as { mode?: string })?.mode || 'both');
-    const doc = await PasswordResetRequest.findById(id).populate(
-      'user',
-      'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword',
-    );
-    if (!doc) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    if (['rejected', 'completed', 'temp_password_sent'].includes(doc.status)) {
-      res.status(400).json({ error: 'Request is closed or already has a temp password' });
-      return;
-    }
-
-    const expires = new Date(Date.now() + 30 * 60 * 1000);
-    let otp: string | undefined;
-    let verificationToken: string | undefined;
-
-    if (mode === 'otp' || mode === 'both') {
-      otp = generateOtp();
-      doc.otpHash = await hashSecret(otp);
-      doc.otpExpiresAt = expires;
-    }
-    if (mode === 'link' || mode === 'both') {
-      verificationToken = generateVerificationToken();
-      doc.verificationTokenHash = await hashSecret(verificationToken);
-      doc.verificationExpiresAt = expires;
-    }
-
-    doc.status = 'awaiting_verification';
-    const code = resetRequestCode(doc.id);
-    const parts = [
-      `Verification for ${code} (expires in 30 min).`,
-      otp ? `OTP: ${otp}` : null,
-      verificationToken ? `Link token: ${verificationToken}` : null,
-      'User enters this in the app under Forgot password → Verify.',
-    ].filter(Boolean);
-    doc.messages.push({
-      role: 'admin',
-      message: parts.join('\n'),
-      createdAt: new Date(),
-    });
-    await doc.save();
-
+router.post(
+  '/password-resets/:id/send-verification',
+  async (req: AuthRequest, res: Response) => {
     try {
-      const uid =
-        doc.user && typeof doc.user === 'object' && '_id' in (doc.user as object)
-          ? String((doc.user as { _id: unknown })._id)
-          : String(doc.user);
-      await sendPushToUser(uid, {
-        title: 'Password reset verification',
-        body: otp
-          ? `Your Expenso verification OTP is ${otp}`
-          : 'Open Expenso → Forgot password to enter your verification token.',
-        data: { type: 'password_reset', requestId: String(doc._id) },
-      });
-    } catch {
-      /* ignore */
-    }
+      const id = paramStr(req.params.id);
+      const mode = String((req.body as { mode?: string })?.mode || 'both');
+      const doc = await PasswordResetRequest.findById(id).populate(
+        'user',
+        'name email lastLoginAt lastLoginDeviceId lastActiveAt devices mustChangePassword'
+      );
+      if (!doc) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      if (
+        ['rejected', 'completed', 'temp_password_sent'].includes(doc.status)
+      ) {
+        res
+          .status(400)
+          .json({ error: 'Request is closed or already has a temp password' });
+        return;
+      }
 
-    res.json({
-      request: serializeResetAdmin(doc, doc.user),
-      otp: otp || null,
-      verificationToken: verificationToken || null,
-      expiresAt: expires,
-      message: 'Verification created. Share OTP/token with the user (also pushed if they have FCM).',
-    });
-  } catch (err) {
-    console.error('Admin send-verification error:', err);
-    res.status(500).json({ error: 'Could not create verification' });
+      const expires = new Date(Date.now() + 30 * 60 * 1000);
+      let otp: string | undefined;
+      let verificationToken: string | undefined;
+
+      if (mode === 'otp' || mode === 'both') {
+        otp = generateOtp();
+        doc.otpHash = await hashSecret(otp);
+        doc.otpExpiresAt = expires;
+      }
+      if (mode === 'link' || mode === 'both') {
+        verificationToken = generateVerificationToken();
+        doc.verificationTokenHash = await hashSecret(verificationToken);
+        doc.verificationExpiresAt = expires;
+      }
+
+      doc.status = 'awaiting_verification';
+      const code = resetRequestCode(doc.id);
+      const parts = [
+        `Verification for ${code} (expires in 30 min).`,
+        otp ? `OTP: ${otp}` : null,
+        verificationToken ? `Link token: ${verificationToken}` : null,
+        'User enters this in the app under Forgot password → Verify.',
+      ].filter(Boolean);
+      doc.messages.push({
+        role: 'admin',
+        message: parts.join('\n'),
+        createdAt: new Date(),
+      });
+      await doc.save();
+
+      try {
+        const uid =
+          doc.user &&
+          typeof doc.user === 'object' &&
+          '_id' in (doc.user as object)
+            ? String((doc.user as { _id: unknown })._id)
+            : String(doc.user);
+        await sendPushToUser(uid, {
+          title: 'Password reset verification',
+          body: otp
+            ? `Your Expenso verification OTP is ${otp}`
+            : 'Open Expenso → Forgot password to enter your verification token.',
+          data: { type: 'password_reset', requestId: String(doc._id) },
+        });
+      } catch {
+        /* ignore */
+      }
+
+      res.json({
+        request: serializeResetAdmin(doc, doc.user),
+        otp: otp || null,
+        verificationToken: verificationToken || null,
+        expiresAt: expires,
+        message:
+          'Verification created. Share OTP/token with the user (also pushed if they have FCM).',
+      });
+    } catch (err) {
+      console.error('Admin send-verification error:', err);
+      res.status(500).json({ error: 'Could not create verification' });
+    }
   }
-});
+);
 
 export default router;
