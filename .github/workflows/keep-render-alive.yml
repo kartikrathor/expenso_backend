@@ -1,19 +1,29 @@
-# Render Free instances sleep after ~15 minutes with no inbound traffic.
-# An external ping every 10 minutes keeps the API warm without a paid plan.
-# Uses ~720 of the 750 free instance hours/month (ok for one web service).
+# Render Free sleeps after ~15 min with no inbound traffic.
+# GitHub cron is often late, so we ping every 5 min and retry through cold starts.
+# Server also self-pings PUBLIC_API_URL while it is running (see startRenderKeepAlive).
 name: Keep Render awake
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - name: Ping /health
         run: |
-          curl -fsS --retry 2 --retry-delay 8 --max-time 90 \
-            "https://expenso-backend-f61z.onrender.com/health"
+          URL="https://expenso-backend-f61z.onrender.com/health"
+          for i in 1 2 3 4 5 6 7 8; do
+            if curl -sS -o /tmp/health.json -w "%{http_code}" --max-time 90 "$URL" | grep -q '^200$'; then
+              cat /tmp/health.json
+              echo
+              exit 0
+            fi
+            echo "attempt $i failed, retrying..."
+            sleep 12
+          done
+          echo "keep-alive ping failed"
+          exit 1

@@ -97,6 +97,37 @@ function startAssistantScheduler() {
   console.log(`⏱️  Assistant maintenance every ${hours}h (cleanup + pattern expand)`);
 }
 
+/** Render Free sleeps after ~15 min with no inbound HTTP. Ping the public URL so idle resets. */
+function startRenderKeepAlive() {
+  if (!process.env.RENDER) return;
+
+  const base = (process.env.PUBLIC_API_URL || process.env.RENDER_EXTERNAL_URL || '').replace(
+    /\/$/,
+    '',
+  );
+  if (!base) {
+    console.warn('🫀 Keep-alive skipped: set PUBLIC_API_URL');
+    return;
+  }
+
+  const minutes = Number(process.env.KEEP_ALIVE_MINUTES || 8);
+  const ms = Math.max(5, minutes) * 60 * 1000;
+  const url = `${base}/health`;
+
+  const ping = async () => {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+      console.log(`🫀 keep-alive ${res.status}`);
+    } catch (err) {
+      console.warn('🫀 keep-alive failed:', err instanceof Error ? err.message : err);
+    }
+  };
+
+  setTimeout(ping, 60_000);
+  setInterval(ping, ms);
+  console.log(`🫀 Render keep-alive every ${Math.round(ms / 60000)} min → ${url}`);
+}
+
 async function main() {
   const uri = process.env.MONGODB_URI;
   if (!uri || uri.includes('YOUR_DB_PASSWORD_HERE')) {
@@ -132,6 +163,7 @@ async function main() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Expenso API running on http://localhost:${PORT}`);
+    startRenderKeepAlive();
   });
 }
 
