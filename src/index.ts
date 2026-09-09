@@ -29,7 +29,7 @@ import proRoutes from './routes/pro';
 import { ensureProCatalog } from './services/proEntitlements';
 import { hasAnyLlmKey } from './services/assistant/llm';
 import { isPushConfigured } from './services/push';
-import { privacyPolicyHtml, termsOfServiceHtml } from './legal/html';
+import { privacyPolicyHtml, termsOfServiceHtml, deleteAccountHtml } from './legal/html';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -48,6 +48,10 @@ app.get('/privacy', (_req, res) => {
 
 app.get('/terms', (_req, res) => {
   res.type('html').send(termsOfServiceHtml());
+});
+
+app.get('/delete-account', (_req, res) => {
+  res.type('html').send(deleteAccountHtml());
 });
 
 app.use('/api/auth', authRoutes);

@@ -38,6 +38,45 @@ function layout(title: string, body: string): string {
       padding: 18px 18px 6px;
     }
     footer { margin-top: 36px; color: #7a8a99; font-size: 0.85rem; }
+    label { display: block; margin: 16px 0 6px; font-size: 0.9rem; color: #c5d0da; font-weight: 600; }
+    input[type="email"], input[type="password"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 11px 12px;
+      border-radius: 10px;
+      border: 1px solid #2c3a4a;
+      background: #0f1419;
+      color: #e8eef4;
+      font-size: 0.98rem;
+    }
+    input:focus { outline: 2px solid #4a9eff; outline-offset: 1px; }
+    .checkbox-row { display: flex; align-items: flex-start; gap: 10px; margin: 18px 0; }
+    .checkbox-row input { margin-top: 4px; }
+    .checkbox-row label { margin: 0; font-weight: 400; color: #c5d0da; }
+    button {
+      width: 100%;
+      padding: 13px;
+      margin-top: 8px;
+      border: none;
+      border-radius: 10px;
+      background: #e5484d;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    #result { margin-top: 16px; font-size: 0.95rem; white-space: pre-wrap; }
+    #result.ok { color: #6fd48c; }
+    #result.err { color: #ff8a8a; }
+    .warn-box {
+      background: #241318;
+      border: 1px solid #5a2530;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 16px 0;
+    }
+    .warn-box p { margin: 0; color: #ffb4b4; font-size: 0.92rem; }
   </style>
 </head>
 <body>
@@ -45,6 +84,7 @@ function layout(title: string, body: string): string {
     <nav>
       <a href="/privacy">Privacy Policy</a>
       <a href="/terms">Terms of Service</a>
+      <a href="/delete-account">Delete Account</a>
       <a href="/health">API health</a>
     </nav>
     <div class="card">
@@ -116,8 +156,9 @@ export function privacyPolicyHtml(): string {
     <h2>5. Retention &amp; deletion</h2>
     <p>
       We keep account and expense data while your account is active. You may delete your account
-      via the app/API where available, or contact us at
-      <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.
+      and all associated data at any time from inside the app, via our
+      <a href="/delete-account">account deletion page</a> (no app install required), or by
+      contacting us at <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.
       After deletion, we remove or anonymize personal data except where we must retain limited
       records for legal, security, or billing reasons.
     </p>
@@ -247,4 +288,101 @@ export function termsOfServiceHtml(): string {
     </p>
   `;
   return layout('Terms of Service', body);
+}
+
+export function deleteAccountHtml(): string {
+  const body = `
+    <h1>Delete your ${APP_NAME} account</h1>
+    <p>
+      Use this page to permanently delete your ${APP_NAME} account and all data associated
+      with it — even if you no longer have the app installed. Sign in with your account
+      email and password to confirm it's you; deletion happens immediately and cannot be undone.
+    </p>
+
+    <div class="warn-box">
+      <p>
+        <strong>This deletes, instantly and permanently:</strong> your profile, all personal
+        and joint expenses, budgets, custom categories, Ask Expenso usage history, joint/group
+        membership, and any pending support or password-reset requests. Pro/theme purchase
+        records with the app store are not affected by this — manage subscriptions from
+        Google Play / App Store.
+      </p>
+    </div>
+
+    <form id="delete-form" autocomplete="off">
+      <label for="email">Account email</label>
+      <input type="email" id="email" name="email" required autocomplete="username" />
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required autocomplete="current-password" />
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="confirm" name="confirm" required />
+        <label for="confirm">
+          I understand this permanently deletes my account and all my data, and cannot be undone.
+        </label>
+      </div>
+
+      <button type="submit" id="submit-btn">Delete my account and all data</button>
+    </form>
+
+    <div id="result" role="status"></div>
+
+    <script>
+      (function () {
+        var form = document.getElementById('delete-form');
+        var btn = document.getElementById('submit-btn');
+        var result = document.getElementById('result');
+
+        form.addEventListener('submit', function (e) {
+          e.preventDefault();
+          var confirmed = document.getElementById('confirm').checked;
+          if (!confirmed) return;
+
+          var email = document.getElementById('email').value.trim();
+          var password = document.getElementById('password').value;
+
+          result.className = '';
+          result.textContent = '';
+          btn.disabled = true;
+          btn.textContent = 'Deleting…';
+
+          fetch('/api/auth/delete-account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email, password: password }),
+          })
+            .then(function (res) {
+              return res.json().then(function (data) {
+                return { ok: res.ok, data: data };
+              });
+            })
+            .then(function (r) {
+              if (r.ok) {
+                result.className = 'ok';
+                result.textContent = '✅ ' + (r.data.message || 'Your account and all data have been deleted.');
+                form.style.display = 'none';
+              } else {
+                result.className = 'err';
+                result.textContent = '⚠️ ' + (r.data.error || 'Could not delete account.');
+                btn.disabled = false;
+                btn.textContent = 'Delete my account and all data';
+              }
+            })
+            .catch(function () {
+              result.className = 'err';
+              result.textContent = "⚠️ Couldn't connect. Please check your internet and try again.";
+              btn.disabled = false;
+              btn.textContent = 'Delete my account and all data';
+            });
+        });
+      })();
+    </script>
+
+    <p style="margin-top:24px;">
+      Prefer email instead? Contact <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>
+      from your account email and we'll delete it for you.
+    </p>
+  `;
+  return layout('Delete Account', body);
 }

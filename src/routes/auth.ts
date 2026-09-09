@@ -2,15 +2,13 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import { User } from '../models/User';
-import { Group } from '../models/Group';
-import { GroupExpense } from '../models/GroupExpense';
 import { PersonalExpense } from '../models/PersonalExpense';
-import { AssistantUsage } from '../models/AssistantUsage';
 import { AssistantMiss } from '../models/AssistantIntent';
 import { UserCategory } from '../models/Category';
 import { PasswordResetRequest } from '../models/PasswordResetRequest';
 import { AuthRequest, requireAuth, signToken } from '../middleware/auth';
 import { entitlementPayload } from '../services/proEntitlements';
+import { deleteUserAndAllData } from '../services/accountDeletion';
 import {
   compareSecret,
   isKnownDevice,
@@ -526,36 +524,52 @@ router.post('/password-reset/:id/verify', async (req, res: Response) => {
 
 router.delete('/me', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user!.userId;
-    const uid = new Types.ObjectId(userId);
-
-    const groups = await Group.find({ 'members.user': uid });
-    for (const group of groups) {
-      group.members = group.members.filter(m => m.user.toString() !== userId);
-      if (group.members.length === 0) {
-        await GroupExpense.deleteMany({ group: group._id });
-        await group.deleteOne();
-      } else {
-        if (group.createdBy.toString() === userId) {
-          group.createdBy = group.members[0].user;
-          group.members[0].role = 'owner';
-        }
-        await group.save();
-      }
-    }
-
-    await GroupExpense.deleteMany({ createdBy: uid });
-    await PersonalExpense.deleteMany({ user: uid });
-    await AssistantUsage.deleteMany({ userId: String(userId) });
-    await AssistantMiss.deleteMany({ userId: uid });
-    await UserCategory.deleteMany({ user: uid });
-    await PasswordResetRequest.deleteMany({ user: uid });
-    await User.deleteOne({ _id: uid });
-
+    await deleteUserAndAllData(req.user!.userId);
     res.json({ message: 'Account and data deleted' });
   } catch (err) {
     console.error('Delete account error:', err);
     res.status(500).json({ error: 'Could not delete account' });
+  }
+});
+
+/**
+ * Public account-deletion endpoint — no app or session required.
+ * Re-verifies email + password (same as login) before wiping everything, instantly.
+ * Backs the public /delete-account web page (required by Play Store's account-deletion policy).
+ */
+router.post('/delete-account', async (req, res: Response) => {
+  try {
+    const { email, password } = req.body as { email?: string; password?: string };
+    const trimmedEmail = (email ?? '').trim().toLowerCase();
+
+    const emailError = validateEmail(trimmedEmail);
+    if (emailError) {
+      res.status(400).json({ error: emailError });
+      return;
+    }
+    if (!password) {
+      res.status(400).json({ error: 'Password is required' });
+      return;
+    }
+
+    const user = await User.findOne({ email: trimmedEmail });
+    if (!user) {
+      res.status(401).json({ error: 'Invalid email or password' });
+      return;
+    }
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) {
+      res.status(401).json({ error: 'Invalid email or password' });
+      return;
+    }
+
+    await deleteUserAndAllData(user.id);
+
+    res.json({ message: 'Your account and all data have been permanently deleted.' });
+  } catch (err) {
+    console.error('Public delete-account error:', err);
+    res.status(500).json({ error: 'Could not delete account. Please try again.' });
   }
 });
 
